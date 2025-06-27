@@ -7,7 +7,6 @@ import android.app.Service
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.IBinder
 import android.util.Log
@@ -17,14 +16,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
-import java.net.Socket
-import java.net.SocketAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.SocketChannel
-import kotlin.concurrent.thread
 
 class AudioService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -56,7 +51,7 @@ class AudioService : Service() {
 
     private fun start(){
         playJob = scope.launch {
-            suspendCancellableCoroutine<Unit> { coroutine ->
+            suspendCancellableCoroutine { coroutine ->
                 var audioTrack: AudioTrack? = null
                 var channel: SocketChannel? = null
                 coroutine.invokeOnCancellation {
@@ -66,7 +61,7 @@ class AudioService : Service() {
                     audioTrack?.stop()
                     Log.d("AudioService.start", "do cancel audio completed")
                 }
-                SocketChannel.open(InetSocketAddress("192.168.1.12", 8888)).use { lChannel ->
+                SocketChannel.open(InetSocketAddress("192.168.2.4", 8888)).use { lChannel ->
                     channel = lChannel
                     var byteBuffer: ByteBuffer =
                         ByteBuffer.allocate(10).order(ByteOrder.LITTLE_ENDIAN)
@@ -99,19 +94,19 @@ class AudioService : Service() {
                         32 -> AudioFormat.ENCODING_PCM_32BIT
                         else -> throw throw Exception("unsupported bits peer sample: $bitsPerSample")
                     }
-                    val lAudioTrack = AudioTrack(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                            .setLegacyStreamType(AudioManager.STREAM_MUSIC)
-                            .build(),
-                        AudioFormat.Builder().setSampleRate(sampleRate)
+                    val audioAttributes = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_GAME)
+                        .build()
+                    val lAudioTrack = AudioTrack.Builder()
+                        .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                        .setAudioAttributes(audioAttributes)
+                        .setAudioFormat(AudioFormat.Builder().setSampleRate(sampleRate)
                             .setEncoding(encoding)
                             .setChannelMask(channelConfig)
-                            .build(),
-                        AudioTrack.getMinBufferSize(sampleRate, channelConfig, encoding),
-                        AudioTrack.MODE_STREAM,
-                        AudioManager.AUDIO_SESSION_ID_GENERATE
-                    )
+                            .build())
+                        .setBufferSizeInBytes(4096)
+                        .setTransferMode(AudioTrack.MODE_STREAM)
+                        .build()
                     audioTrack = lAudioTrack
                     Log.d(
                         "AudioService.start",
@@ -123,22 +118,42 @@ class AudioService : Service() {
                             )
                         }, ${lAudioTrack.bufferSizeInFrames}"
                     )
-//                    lAudioTrack.per = AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
                     lAudioTrack.play()
                     byteBuffer = ByteBuffer.allocate(lAudioTrack.bufferSizeInFrames * 2)
+                    var zeroStart = 0L
+                    var writeAudio = true
+                    var allZero = true
                     try {
-                        var total = 0L
-                        var times = 0L
                         while (play && lChannel.read(byteBuffer) != -1) {
                             byteBuffer.flip()
                             if (byteBuffer.hasRemaining()) {
-                                total += byteBuffer.remaining()
-                                if (times++ % 100000 == 0L){
-                                    Log.d("AudioService.start", "agv read data size: $times = ${total / times}")
+                                // 输出静音数据超过60秒会被系统强制静音, 所以检测全静音超过五秒则不再输出，直到有音频输入
+                                for (i in byteBuffer.position() until byteBuffer.limit()){
+                                    if (byteBuffer.array()[i].toInt() != 0) {
+                                        allZero = false
+                                        break
+                                    }
                                 }
-                                lAudioTrack.write(byteBuffer, byteBuffer.remaining(), AudioTrack.WRITE_NON_BLOCKING)
+                                if (allZero){
+                                    if (zeroStart == 0L) {
+                                        zeroStart = System.currentTimeMillis()
+                                    }else if(writeAudio && System.currentTimeMillis() - zeroStart > 5000){
+                                        byteBuffer.clear()
+                                        writeAudio = false
+                                    }
+                                }else{
+                                    if (zeroStart != 0L){
+                                        zeroStart = 0
+                                        writeAudio = false
+                                    }
+                                }
+                                if (writeAudio) {
+                                    lAudioTrack.write(byteBuffer, byteBuffer.remaining(), AudioTrack.WRITE_NON_BLOCKING)
+                                    byteBuffer.compact()
+                                }else{
+                                    byteBuffer.clear()
+                                }
                             }
-                            byteBuffer.compact()
                         }
                     }catch (e: Exception){
                         if (play){
