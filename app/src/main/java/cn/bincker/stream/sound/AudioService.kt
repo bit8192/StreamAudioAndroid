@@ -5,30 +5,60 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
-import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioTrack
-import android.os.IBinder
+import android.os.Binder
 import android.util.Log
 import androidx.core.content.getSystemService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.channels.SocketChannel
+
+const val PORT = 8888
+
+const val PACKAGE_SIZE: Int = 1200
+
+const val PACK_TYPE_PING: Byte = 0x00
+const val PACK_TYPE_PONG: Byte = 0x01
+
+
+const val PACK_TYPE_ECDH_REQUEST: Byte =              0b00010000
+const val PACK_TYPE_ECDH_RESPONSE: Byte =             0b00010001
+const val PACK_TYPE_PAIR_REQUEST: Byte =              0b00010010
+const val PACK_TYPE_PAIR_RESPONSE: Byte =             0b00010011
+
+
+const val PACK_TYPE_AUDIO_START: Byte =   0b00100000
+const val PACK_TYPE_AUDIO_INFO: Byte =    0b00100001
+const val PACK_TYPE_AUDIO_STOP: Byte =    0b00100010
+const val PACK_TYPE_AUDIO_DATA: Byte =    0b00100100
+
+
+const val PACK_TYPE_ENCRYPTED_DATA: Byte =    0b01000000
+const val PACK_TYPE_SIGN_DATA: Byte =    0b01000001
+
 
 class AudioService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO)
     private var playJob: Job? = null
     private var play = true
+    private var receiveMessageJob: Job? = null
 
-    override fun onBind(intent: Intent): IBinder? {
-        return null
+    inner class AudioServiceBinder: Binder(){
+        fun isPlay() = play
+        suspend fun scan(){
+            val job = sendMessage("255.255.255.255", ByteArray(1) {1})
+            while (job.isActive) {
+                delay(1000)
+            }
+        }
     }
+
+    override fun onBind(intent: Intent) = AudioServiceBinder()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notificationId = "stream_audio_notification_channel"
@@ -50,7 +80,12 @@ class AudioService : Service() {
     }
 
     private fun start(){
-        playJob = scope.launch {
+        if (!play){
+            stop()
+            play = true
+            receiveMessage()
+        }
+        /*playJob = scope.launch {
             suspendCancellableCoroutine { coroutine ->
                 var audioTrack: AudioTrack? = null
                 var channel: SocketChannel? = null
@@ -162,6 +197,41 @@ class AudioService : Service() {
                     }
                 }
             }
+        }*/
+    }
+
+    private fun sendMessage(host: String, data: ByteArray) = scope.launch {
+        DatagramSocket().use {
+            if (host == "255.255.255.255"){
+                it.broadcast = true
+            }
+            it.send(DatagramPacket(data, data.size, InetSocketAddress(host, PORT)))
         }
+    }
+
+    private fun receiveMessage(){
+        receiveMessageJob = scope.launch {
+            val data = ByteArray(PACKAGE_SIZE)
+            val buffer = ByteBuffer.wrap(data)
+            val datagramPacket = DatagramPacket(data, buffer.capacity())
+            while (play) {
+                val socket = DatagramSocket(PORT)
+                socket.use {
+                    while (play){
+                        try {
+                            socket.receive(datagramPacket)
+                            buffer.clear()
+                            Log.d("AudioService.receiveMessage", "receiveMessage: " + data.joinToString { "%02x".format(it) })
+                        }catch (e: Exception){
+                            Log.w("AudioService.receiveMessage", "receiveMessage: receive message error", e)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun stop(){
+        play = false
     }
 }
