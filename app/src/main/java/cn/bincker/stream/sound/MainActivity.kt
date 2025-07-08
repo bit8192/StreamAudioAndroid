@@ -68,10 +68,26 @@ class MainActivity : ComponentActivity() {
         if(checkSelfPermission(Manifest.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK) != PackageManager.PERMISSION_GRANTED){
             requestPermissions(arrayOf(Manifest.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK), 0)
         }
+        if(checkSelfPermission(Manifest.permission.ACCESS_NETWORK_STATE) != PackageManager.PERMISSION_GRANTED){
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_NETWORK_STATE), 0)
+        }
+        if(checkSelfPermission(Manifest.permission.ACCESS_WIFI_STATE) != PackageManager.PERMISSION_GRANTED){
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_WIFI_STATE), 0)
+        }
+        if(checkSelfPermission(Manifest.permission.CHANGE_WIFI_MULTICAST_STATE) != PackageManager.PERMISSION_GRANTED){
+            requestPermissions(arrayOf(Manifest.permission.CHANGE_WIFI_MULTICAST_STATE), 0)
+        }
 
         bindService(Intent(this, AudioService::class.java), object: ServiceConnection{
             override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
                 audioServiceBinder = service as AudioService.AudioServiceBinder?
+                if (audioServiceBinder?.isPlay() == false) {
+                    startForegroundService(
+                        Intent(this@MainActivity, AudioService::class.java).apply {
+                            putExtra("cmd", 0)
+                        }
+                    )
+                }
             }
 
             override fun onServiceDisconnected(name: ComponentName?) {

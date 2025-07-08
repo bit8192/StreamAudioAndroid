@@ -45,13 +45,13 @@ const val PACK_TYPE_SIGN_DATA: Byte =    0b01000001
 class AudioService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO)
     private var playJob: Job? = null
-    private var play = true
+    private var play = false
     private var receiveMessageJob: Job? = null
 
     inner class AudioServiceBinder: Binder(){
         fun isPlay() = play
         suspend fun scan(){
-            val job = sendMessage("255.255.255.255", ByteArray(1) {1})
+            val job = sendMessage("255.255.255.255", ByteArray(1))
             while (job.isActive) {
                 delay(1000)
             }
@@ -68,10 +68,8 @@ class AudioService : Service() {
         val cmd = intent?.getIntExtra("cmd", -1)
         Log.d("AudioService.onStartCommand", "cmd=$cmd")
         if (cmd == 0){
-            play = true
             start()
         }else if(cmd == 1){
-            play = false
             playJob?.cancel()
             playJob = null
             Log.d("AudioService.onStartCommand", "stopped")
@@ -80,11 +78,11 @@ class AudioService : Service() {
     }
 
     private fun start(){
-        if (!play){
-            stop()
-            play = true
-            receiveMessage()
-        }
+        Log.d("AudioService.start", "start: play=$play")
+        if (play) return
+        stop()
+        startReceiveMessage()
+        play = true
         /*playJob = scope.launch {
             suspendCancellableCoroutine { coroutine ->
                 var audioTrack: AudioTrack? = null
@@ -201,7 +199,7 @@ class AudioService : Service() {
     }
 
     private fun sendMessage(host: String, data: ByteArray) = scope.launch {
-        DatagramSocket().use {
+        DatagramSocket(PORT).use {
             if (host == "255.255.255.255"){
                 it.broadcast = true
             }
@@ -209,22 +207,23 @@ class AudioService : Service() {
         }
     }
 
-    private fun receiveMessage(){
+    private fun startReceiveMessage(){
+        Log.d("AudioService.startReceiveMessage", "start receive message")
         receiveMessageJob = scope.launch {
             val data = ByteArray(PACKAGE_SIZE)
-            val buffer = ByteBuffer.wrap(data)
-            val datagramPacket = DatagramPacket(data, buffer.capacity())
-            while (play) {
-                val socket = DatagramSocket(PORT)
-                socket.use {
-                    while (play){
-                        try {
-                            socket.receive(datagramPacket)
-                            buffer.clear()
-                            Log.d("AudioService.receiveMessage", "receiveMessage: " + data.joinToString { "%02x".format(it) })
-                        }catch (e: Exception){
-                            Log.w("AudioService.receiveMessage", "receiveMessage: receive message error", e)
-                        }
+            val socket = DatagramSocket(InetSocketAddress(PORT))
+            socket.use {
+                while (play){
+                    try {
+                        val datagramPacket = DatagramPacket(data, 0, data.size)
+                        socket.receive(datagramPacket)
+
+                        Log.d(
+                            "AudioService.receiveMessage",
+                            "receiveMessage: ${data[0]}\toffset=${datagramPacket.offset}\tlen=${datagramPacket.length}\taddr=${datagramPacket.address.hostAddress}\tport=${datagramPacket.port}"
+                        )
+                    }catch (e: Exception){
+                        Log.w("AudioService.receiveMessage", "receiveMessage: receive message error", e)
                     }
                 }
             }
