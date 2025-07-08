@@ -14,9 +14,16 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.net.DatagramPacket
-import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
+import java.net.ProtocolFamily
+import java.net.SocketAddress
+import java.net.SocketOptions
+import java.net.StandardProtocolFamily
+import java.net.StandardSocketOptions
 import java.nio.ByteBuffer
+import java.nio.channels.DatagramChannel
 
 const val PORT = 8888
 
@@ -41,17 +48,20 @@ const val PACK_TYPE_AUDIO_DATA: Byte =    0b00100100
 const val PACK_TYPE_ENCRYPTED_DATA: Byte =    0b01000000
 const val PACK_TYPE_SIGN_DATA: Byte =    0b01000001
 
+val BROADCAST_ADDRESS: InetAddress = InetAddress.getByName("255.255.255.255")
 
 class AudioService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO)
     private var playJob: Job? = null
     private var play = false
     private var receiveMessageJob: Job? = null
+    private var datagramChannel: DatagramChannel? = null
+    private val localAddressList = mutableListOf<InetAddress>()
 
     inner class AudioServiceBinder: Binder(){
         fun isPlay() = play
         suspend fun scan(){
-            val job = sendMessage("255.255.255.255", ByteArray(1))
+            val job = sendMessage(BROADCAST_ADDRESS, ByteArray(1))
             while (job.isActive) {
                 delay(1000)
             }
@@ -66,13 +76,11 @@ class AudioService : Service() {
         getSystemService<NotificationManager>()!!.createNotificationChannel(channel)
         startForeground(1, Notification.Builder(this, notificationId).setContentTitle(getString(R.string.app_name)).setContentText("playing...").setSmallIcon(R.drawable.ic_launcher_foreground).build())
         val cmd = intent?.getIntExtra("cmd", -1)
-        Log.d("AudioService.onStartCommand", "cmd=$cmd")
         if (cmd == 0){
             start()
         }else if(cmd == 1){
             playJob?.cancel()
             playJob = null
-            Log.d("AudioService.onStartCommand", "stopped")
         }
         return super.onStartCommand(intent, flags, startId)
     }
@@ -81,8 +89,21 @@ class AudioService : Service() {
         Log.d("AudioService.start", "start: play=$play")
         if (play) return
         stop()
+        datagramChannel = DatagramChannel.open(StandardProtocolFamily.INET6).also {
+            it.bind(InetSocketAddress(PORT))
+            it.socket().broadcast = true
+            Log.d("AudioService.start", "start: addr=${it.localAddress}")
+        }
         startReceiveMessage()
         play = true
+        localAddressList.clear()
+        for (networkInterface in NetworkInterface.getNetworkInterfaces()) {
+            if (!networkInterface.isUp || networkInterface.isLoopback || networkInterface.isVirtual) continue
+            localAddressList.addAll(networkInterface.inetAddresses.toList())
+            if (networkInterface.name.contains("wlan")){
+                datagramChannel?.setOption(StandardSocketOptions.IP_MULTICAST_IF, networkInterface)
+            }
+        }
         /*playJob = scope.launch {
             suspendCancellableCoroutine { coroutine ->
                 var audioTrack: AudioTrack? = null
@@ -198,29 +219,28 @@ class AudioService : Service() {
         }*/
     }
 
-    private fun sendMessage(host: String, data: ByteArray) = scope.launch {
-        DatagramSocket(PORT).use {
-            if (host == "255.255.255.255"){
-                it.broadcast = true
-            }
-            it.send(DatagramPacket(data, data.size, InetSocketAddress(host, PORT)))
-        }
+    private fun sendMessage(address: InetAddress, data: ByteArray) = scope.launch {
+//            it.broadcast = addr.hostAddress == "255.255.255.255"
+        datagramChannel?.send(ByteBuffer.wrap(data), InetSocketAddress(address, PORT))
     }
 
     private fun startReceiveMessage(){
         Log.d("AudioService.startReceiveMessage", "start receive message")
         receiveMessageJob = scope.launch {
-            val data = ByteArray(PACKAGE_SIZE)
-            val socket = DatagramSocket(InetSocketAddress(PORT))
-            socket.use {
+            val buffer = ByteBuffer.allocate(PACKAGE_SIZE)
+            datagramChannel?.use { channel->
                 while (play){
                     try {
-                        val datagramPacket = DatagramPacket(data, 0, data.size)
-                        socket.receive(datagramPacket)
+                        buffer.clear()
+                        val address: SocketAddress = channel.receive(buffer) ?: continue
+                        if (address is InetSocketAddress){
+                            if (localAddressList.any { it.address.contentEquals(address.address.address) }) continue
+                        }
 
+                        buffer.flip()
                         Log.d(
                             "AudioService.receiveMessage",
-                            "receiveMessage: ${data[0]}\toffset=${datagramPacket.offset}\tlen=${datagramPacket.length}\taddr=${datagramPacket.address.hostAddress}\tport=${datagramPacket.port}"
+                            "receiveMessage: ${buffer.array().copyOf(buffer.remaining()).joinToString("") { "%02X".format(it) }}"
                         )
                     }catch (e: Exception){
                         Log.w("AudioService.receiveMessage", "receiveMessage: receive message error", e)
