@@ -8,18 +8,17 @@ import android.content.Intent
 import android.os.Binder
 import android.util.Log
 import androidx.core.content.getSystemService
+import cn.bincker.stream.sound.entity.AudioServerInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.net.DatagramPacket
+import kotlinx.coroutines.withContext
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
-import java.net.ProtocolFamily
 import java.net.SocketAddress
-import java.net.SocketOptions
 import java.net.StandardProtocolFamily
 import java.net.StandardSocketOptions
 import java.nio.ByteBuffer
@@ -57,14 +56,28 @@ class AudioService : Service() {
     private var receiveMessageJob: Job? = null
     private var datagramChannel: DatagramChannel? = null
     private val localAddressList = mutableListOf<InetAddress>()
+    private var scanning = false
+    private var scanJob: Job? = null
+    private var scanCallback: ((AudioServerInfo)->Unit)? = null
 
     inner class AudioServiceBinder: Binder(){
         fun isPlay() = play
-        suspend fun scan(){
-            val job = sendMessage(BROADCAST_ADDRESS, ByteArray(1))
-            while (job.isActive) {
-                delay(1000)
+        fun startScan(callback: (AudioServerInfo)->Unit){
+            if (scanning) return
+            scanCallback = callback
+            scanning = true
+            scanJob = scope.launch {
+                while (scanning) {
+                    sendMessage(BROADCAST_ADDRESS, ByteArray(1))
+                    delay(1000L)
+                }
             }
+        }
+        fun stopScan(){
+            scanning = false
+            scanCallback = null
+            scanJob?.cancel()
+            scanJob = null
         }
     }
 
@@ -90,7 +103,6 @@ class AudioService : Service() {
         if (play) return
         stop()
         datagramChannel = DatagramChannel.open(StandardProtocolFamily.INET6).also {
-            it.bind(InetSocketAddress(PORT))
             it.socket().broadcast = true
             Log.d("AudioService.start", "start: addr=${it.localAddress}")
         }
@@ -219,9 +231,10 @@ class AudioService : Service() {
         }*/
     }
 
-    private fun sendMessage(address: InetAddress, data: ByteArray) = scope.launch {
-//            it.broadcast = addr.hostAddress == "255.255.255.255"
-        datagramChannel?.send(ByteBuffer.wrap(data), InetSocketAddress(address, PORT))
+    private suspend fun sendMessage(address: InetAddress, data: ByteArray) {
+        withContext(Dispatchers.IO) {
+            datagramChannel?.send(ByteBuffer.wrap(data), InetSocketAddress(address, PORT))
+        }
     }
 
     private fun startReceiveMessage(){
@@ -238,10 +251,17 @@ class AudioService : Service() {
                         }
 
                         buffer.flip()
+                        if (buffer.remaining() < 1) continue
+
                         Log.d(
                             "AudioService.receiveMessage",
                             "receiveMessage: ${buffer.array().copyOf(buffer.remaining()).joinToString("") { "%02X".format(it) }}"
                         )
+                        when(buffer.get()){
+                            PACK_TYPE_PONG -> {
+                                scanCallback?.invoke(AudioServerInfo(if (address is InetSocketAddress) address.hostName else address.toString(), address))
+                            }
+                        }
                     }catch (e: Exception){
                         Log.w("AudioService.receiveMessage", "receiveMessage: receive message error", e)
                     }

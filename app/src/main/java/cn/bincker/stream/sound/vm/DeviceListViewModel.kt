@@ -21,9 +21,14 @@ class DeviceListViewModel: ViewModel() {
                 isRefresh.value = true
                 try {
                     withContext(context = Dispatchers.IO) {
-                        binder.scan()
+                        binder.startScan { server->
+                            if (serverList.none { it.address == server.address }){
+                                serverList.add(server)
+                            }
+                        }
+                        delay(5000)
+                        binder.stopScan()
                     }
-                    delay(1000)
                 }finally {
                     isRefresh.value = false
                 }
