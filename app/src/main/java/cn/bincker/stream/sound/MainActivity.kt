@@ -1,80 +1,67 @@
 package cn.bincker.stream.sound
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.IBinder
+import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.viewModels
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Shapes
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat.requestPermissions
 import cn.bincker.stream.sound.entity.AudioServerInfo
 import cn.bincker.stream.sound.ui.theme.StreamSoundTheme
 import cn.bincker.stream.sound.vm.DeviceListViewModel
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import java.net.InetSocketAddress
 
+private const val TAG = "MainActivity"
 class MainActivity : ComponentActivity() {
     private var audioServiceBinder: AudioService.AudioServiceBinder? = null
     private val vm by viewModels<DeviceListViewModel>()
+    private lateinit var barcodeLauncher : ActivityResultLauncher<ScanOptions>
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         enableEdgeToEdge()
         setContent {
             StreamSoundTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    /*Box(modifier = Modifier.padding(innerPadding).fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column {
-                            Button({
-                                startForegroundService(
-                                    Intent(this@MainActivity, AudioService::class.java).apply {
-                                        putExtra("cmd", 0)
-                                    }
-                                )
-                            }){
-                                Text("Start")
-                            }
-                            Button({
-                                startForegroundService(Intent(this@MainActivity, AudioService::class.java).apply {
-                                    putExtra("cmd", 1)
-                                })
-                            }, modifier = Modifier.padding(top = 10.dp)){
-                                Text("Stop")
-                            }
-                        }
-                    }*/
-                    DevicesList(modifier = Modifier.padding(innerPadding), vm = vm) { audioServiceBinder }
-                }
+                Page(vm, audioServiceBinder, barcodeLauncher)
             }
         }
     }
@@ -110,6 +97,17 @@ class MainActivity : ComponentActivity() {
                 audioServiceBinder = null
             }
         }, BIND_AUTO_CREATE)
+
+        barcodeLauncher = registerForActivityResult(ScanContract()) { result ->
+            if(result.contents != null){
+                Log.d("MainActivity", "Scanned code: ${result.contents}")
+                // 处理扫描结果
+                audioServiceBinder?.pairDevice(result.contents)
+                Toast.makeText(this, "Scanned: ${result.contents}", Toast.LENGTH_LONG).show()
+            } else {
+                Log.d("MainActivity", "No code scanned")
+            }
+        }
     }
 }
 
@@ -122,9 +120,13 @@ fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel = DeviceL
         PullToRefreshBox(isRefresh, onRefresh = {
             vm.refresh(binderGetter.invoke())
         }, state = pullToRefreshState) {
-            LazyColumn(modifier = Modifier.fillMaxSize().padding(10.dp, 5.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            LazyColumn(modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp, 5.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 items(vm.serverList.toList(), {it.address}) {
-                    Column(modifier = Modifier.fillMaxWidth().clickable {  }) {
+                    Column(modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { }) {
                         Text(it.name, fontSize = 36.sp)
                     }
                 }
@@ -133,6 +135,43 @@ fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel = DeviceL
     }
 }
 
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun Page(vm: DeviceListViewModel, audioServiceBinder: AudioService.AudioServiceBinder? = null, barcodeLauncher: ActivityResultLauncher<ScanOptions>? = null) {
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.app_name)) },
+                actions = {
+                    val context = LocalContext.current
+                    val activity = LocalActivity.current
+                    IconButton(onClick = {
+                        if(context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED){
+                            if(activity != null) requestPermissions(activity, arrayOf(Manifest.permission.CAMERA), 0)
+                        }
+                        if(context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED){
+                            if(activity != null) requestPermissions(activity, arrayOf(Manifest.permission.READ_MEDIA_IMAGES), 0)
+                        }
+                        Log.d(TAG, "Page: scan btn, barcodeLauncher=$barcodeLauncher")
+                        barcodeLauncher?.launch(ScanOptions().apply {
+                            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                            setPrompt("请将二维码置于取景框内扫描")
+                            setBeepEnabled(true)
+                            setOrientationLocked(false)
+                        })
+                    }) {
+                        Icon(painterResource(R.drawable.ic_qr_scan), contentDescription = "扫码")
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        DevicesList(modifier = Modifier.padding(innerPadding), vm = vm) { audioServiceBinder }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Preview
 @Composable
 fun PreviewMainApp(){
@@ -140,5 +179,6 @@ fun PreviewMainApp(){
     for (i in 0 until 10) {
         vm.serverList.add(AudioServerInfo("Device" + (i + 1), InetSocketAddress("192.168.1." + (i + 1), 0)))
     }
-    DevicesList(vm = vm) {null}
+    // Preview 中也展示顶部栏
+    Page(vm = vm)
 }

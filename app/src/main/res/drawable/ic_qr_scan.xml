@@ -1,0 +1,32 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- 左上角 L -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M3,3 H9 V5 H5 V9 H3 Z" />
+
+    <!-- 右上角 L（反向） -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M15,3 H21 V9 H19 V5 H15 Z" />
+
+    <!-- 左下角 L（反向） -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M3,15 H5 V19 H9 V21 H3 Z" />
+
+    <!-- 右下角 小矩形 -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M15,19 H19 V15 H21 V21 H15 Z" />
+
+    <!-- 中央几个小方块（模拟二维码模块） -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M8,11 H16 V13 H8 Z" />
+</vector>
+

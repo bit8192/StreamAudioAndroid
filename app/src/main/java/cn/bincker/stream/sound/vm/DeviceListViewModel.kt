@@ -20,15 +20,15 @@ class DeviceListViewModel: ViewModel() {
             nullableBinder?.let { binder->
                 isRefresh.value = true
                 try {
-                    withContext(context = Dispatchers.IO) {
-                        binder.startScan { server->
-                            if (serverList.none { it.address == server.address }){
-                                serverList.add(server)
-                            }
-                        }
-                        delay(5000)
-                        binder.stopScan()
-                    }
+//                    withContext(context = Dispatchers.IO) {
+//                        binder.startScan { server->
+//                            if (serverList.none { it.address == server.address }){
+//                                serverList.add(server)
+//                            }
+//                        }
+//                        delay(5000)
+//                        binder.stopScan()
+//                    }
                 }finally {
                     isRefresh.value = false
                 }
