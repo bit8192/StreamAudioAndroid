@@ -32,6 +32,7 @@ android {
         jvmTarget = "11"
     }
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 }
@@ -47,9 +48,9 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
-    implementation("org.bouncycastle:bcprov-jdk15to18:1.78")
-    implementation("org.bouncycastle:bcpkix-jdk15to18:1.78")
+    implementation("org.bouncycastle:bcprov-jdk15to18:1.83")
+    implementation("org.bouncycastle:bcpkix-jdk15to18:1.83")
+    implementation("org.yaml:snakeyaml:2.2")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")

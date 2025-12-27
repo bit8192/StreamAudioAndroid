@@ -1,13 +1,13 @@
 package cn.bincker.stream.sound
 
 import android.Manifest
-import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.IBinder
+import android.util.Base64
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -16,6 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,6 +37,7 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -43,12 +45,14 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat.requestPermissions
-import cn.bincker.stream.sound.entity.AudioServerInfo
+import cn.bincker.stream.sound.config.DeviceConfig
+import cn.bincker.stream.sound.entity.DeviceInfo
 import cn.bincker.stream.sound.ui.theme.StreamSoundTheme
+import cn.bincker.stream.sound.utils.generatePrivateKey
+import cn.bincker.stream.sound.utils.loadPrivateKey
 import cn.bincker.stream.sound.vm.DeviceListViewModel
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
-import java.net.InetSocketAddress
 
 private const val TAG = "MainActivity"
 class MainActivity : ComponentActivity() {
@@ -61,7 +65,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             StreamSoundTheme {
-                Page(vm, audioServiceBinder, barcodeLauncher)
+                Page(vm)
             }
         }
     }
@@ -113,21 +117,23 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel = DeviceListViewModel(), binderGetter: ()->AudioService.AudioServiceBinder?){
+fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel = DeviceListViewModel()){
     val isRefresh by vm.isRefresh
     val pullToRefreshState = rememberPullToRefreshState()
+    val context = LocalContext.current
+    vm.refresh(context)
     Box(modifier = modifier.fillMaxSize()) {
         PullToRefreshBox(isRefresh, onRefresh = {
-            vm.refresh(binderGetter.invoke())
+            vm.refresh(context)
         }, state = pullToRefreshState) {
             LazyColumn(modifier = Modifier
                 .fillMaxSize()
-                .padding(10.dp, 5.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                items(vm.serverList.toList(), {it.address}) {
+                , verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                items(vm.deviceList.toList(), {it.config.address}) {
                     Column(modifier = Modifier
                         .fillMaxWidth()
                         .clickable { }) {
-                        Text(it.name, fontSize = 36.sp)
+                        Text(it.config.name, fontSize = 36.sp, modifier = Modifier.padding(10.dp, 0.dp))
                     }
                 }
             }
@@ -137,9 +143,9 @@ fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel = DeviceL
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-private fun Page(vm: DeviceListViewModel, audioServiceBinder: AudioService.AudioServiceBinder? = null, barcodeLauncher: ActivityResultLauncher<ScanOptions>? = null) {
+private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLauncher<ScanOptions>? = null) {
     Scaffold(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().background(Color(255, 200, 200)),
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.app_name)) },
@@ -167,7 +173,7 @@ private fun Page(vm: DeviceListViewModel, audioServiceBinder: AudioService.Audio
             )
         }
     ) { innerPadding ->
-        DevicesList(modifier = Modifier.padding(innerPadding), vm = vm) { audioServiceBinder }
+        DevicesList(modifier = Modifier.padding(innerPadding), vm = vm)
     }
 }
 
@@ -177,7 +183,13 @@ private fun Page(vm: DeviceListViewModel, audioServiceBinder: AudioService.Audio
 fun PreviewMainApp(){
     val vm = DeviceListViewModel()
     for (i in 0 until 10) {
-        vm.serverList.add(AudioServerInfo("Device" + (i + 1), InetSocketAddress("192.168.1." + (i + 1), 0)))
+        vm.deviceList.add(DeviceInfo(
+            DeviceConfig().apply {
+                name = "设备$i"
+                address = "192.168.1.${100 + i}:12345"
+                publicKey = Base64.encodeToString(loadPrivateKey(generatePrivateKey()).generatePublicKey().encoded, Base64.DEFAULT)
+            }
+        ))
     }
     // Preview 中也展示顶部栏
     Page(vm = vm)

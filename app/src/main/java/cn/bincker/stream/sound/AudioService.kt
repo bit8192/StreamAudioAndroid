@@ -9,14 +9,13 @@ import android.os.Binder
 import android.util.Log
 import android.widget.Toast
 import androidx.core.content.getSystemService
-import cn.bincker.stream.sound.entity.AudioServerInfo
+import cn.bincker.stream.sound.config.DeviceConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
@@ -26,7 +25,7 @@ import java.net.StandardSocketOptions
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
 import java.security.KeyPair
-import java.security.Security
+import java.security.KeyPairGenerator
 
 const val PORT = 8888
 
@@ -64,34 +63,11 @@ class AudioService : Service() {
     private val localAddressList = mutableListOf<InetAddress>()
     private var scanning = false
     private var scanJob: Job? = null
-    private var scanCallback: ((AudioServerInfo)->Unit)? = null
-    private lateinit var edchKeyPair: KeyPair
-    private lateinit var signKeyPair: KeyPair
-
-    init {
-        loadKeyPairs()
-    }
-
-    private fun loadKeyPairs() {
-        val bouncyCastleProvider = Security.getProvider("BC")
-        if (bouncyCastleProvider == null){
-            Security.addProvider(BouncyCastleProvider())
-        }else if(bouncyCastleProvider.javaClass.name != BouncyCastleProvider::class.java.name){
-            Security.removeProvider("BC")
-            Security.insertProviderAt(BouncyCastleProvider(), 1)
-        }
-        Security.getProviders().forEach { provider ->
-            Log.d(TAG, "loadKeyPairs: provider ${provider.name} algorithms=${provider.services.joinToString(", ") { it.algorithm }}")
-        }
-        val keyPairGenerator = java.security.KeyPairGenerator.getInstance("X25519", "BC")
-        edchKeyPair = keyPairGenerator.generateKeyPair()
-        Log.d(TAG, "loadKeyPairs: gen edch private key " + edchKeyPair.private.encoded.size)
-        Log.d(TAG, "loadKeyPairs: gen edch public key " + edchKeyPair.public.encoded.size)
-    }
+    private var scanCallback: ((DeviceConfig)->Unit)? = null
 
     inner class AudioServiceBinder: Binder(){
         fun isPlay() = play
-        fun getDeviceList(): List<AudioServerInfo> {
+        fun getDeviceList(): List<DeviceConfig> {
             return emptyList()
         }
         fun pairDevice(uri: String){
@@ -111,7 +87,7 @@ class AudioService : Service() {
             }
         }
 
-        fun startScan(callback: (AudioServerInfo)->Unit){
+        fun startScan(callback: (DeviceConfig)->Unit){
             if (scanning) return
             scanCallback = callback
             scanning = true
@@ -308,7 +284,7 @@ class AudioService : Service() {
                         )
                         when(buffer.get()){
                             PACK_TYPE_PONG -> {
-                                scanCallback?.invoke(AudioServerInfo(if (address is InetSocketAddress) address.hostName else address.toString(), address))
+//                                scanCallback?.invoke(DeviceConfig(if (address is InetSocketAddress) address.hostName else address.toString(), address))
                             }
                         }
                     }catch (e: Exception){
