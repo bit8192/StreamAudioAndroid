@@ -10,6 +10,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.core.content.getSystemService
 import cn.bincker.stream.sound.config.DeviceConfig
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -19,11 +20,13 @@ import kotlinx.coroutines.withContext
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.Socket
 import java.net.SocketAddress
 import java.net.StandardProtocolFamily
 import java.net.StandardSocketOptions
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
+import java.nio.channels.SocketChannel
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 
@@ -52,8 +55,19 @@ const val PACK_TYPE_SIGN_DATA: Byte =    0b01000001
 
 val BROADCAST_ADDRESS: InetAddress = InetAddress.getByName("255.255.255.255")
 
+const val INTENT_EXTRA_KEY_CMD = "cmd"
+const val INTENT_EXTRA_KEY_DEVICE_NAME = "device-name"
+
+enum class AudioServiceCommandEnum {
+    CONNECT,
+    PLAY,
+    STOP,
+    DISCONNECT
+}
+
 private const val TAG = "AudioService"
 
+@AndroidEntryPoint
 class AudioService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO)
     private var playJob: Job? = null
@@ -61,15 +75,11 @@ class AudioService : Service() {
     private var receiveMessageJob: Job? = null
     private var datagramChannel: DatagramChannel? = null
     private val localAddressList = mutableListOf<InetAddress>()
-    private var scanning = false
-    private var scanJob: Job? = null
-    private var scanCallback: ((DeviceConfig)->Unit)? = null
+    private var controlSocket: SocketChannel? = null
+    private var connected = false
 
     inner class AudioServiceBinder: Binder(){
         fun isPlay() = play
-        fun getDeviceList(): List<DeviceConfig> {
-            return emptyList()
-        }
         fun pairDevice(uri: String){
             Log.d("AudioService.pairDevice", "pairDevice: uri=$uri")
             if (!uri.startsWith("streamsound://")){
@@ -86,24 +96,6 @@ class AudioService : Service() {
                 Log.d("AudioService.pairDevice", "pairDevice: address=$address")
             }
         }
-
-        fun startScan(callback: (DeviceConfig)->Unit){
-            if (scanning) return
-            scanCallback = callback
-            scanning = true
-            scanJob = scope.launch {
-                while (scanning) {
-                    sendMessage(BROADCAST_ADDRESS, ByteArray(1))
-                    delay(1000L)
-                }
-            }
-        }
-        fun stopScan(){
-            scanning = false
-            scanCallback = null
-            scanJob?.cancel()
-            scanJob = null
-        }
     }
 
     override fun onBind(intent: Intent) = AudioServiceBinder()
@@ -113,14 +105,48 @@ class AudioService : Service() {
         val channel = NotificationChannel(notificationId, "stream audio notification channel", NotificationManager.IMPORTANCE_LOW)
         getSystemService<NotificationManager>()!!.createNotificationChannel(channel)
         startForeground(1, Notification.Builder(this, notificationId).setContentTitle(getString(R.string.app_name)).setContentText("playing...").setSmallIcon(R.drawable.ic_launcher_foreground).build())
-        val cmd = intent?.getIntExtra("cmd", -1)
-        if (cmd == 0){
-            start()
-        }else if(cmd == 1){
-            playJob?.cancel()
-            playJob = null
+        val cmd = intent?.getStringExtra(INTENT_EXTRA_KEY_CMD)?.let {
+            try {
+                AudioServiceCommandEnum.valueOf(it)
+            }catch (e: Exception) {
+                Log.e(TAG, "onStartCommand: unknown cmd, cmd=${it}", e)
+            }
+        } ?: return super.onStartCommand(intent, flags, startId)
+        try {
+            when (cmd) {
+                AudioServiceCommandEnum.CONNECT -> {
+                    val deviceName = intent.getStringExtra(INTENT_EXTRA_KEY_DEVICE_NAME)
+                    if (deviceName == null) {
+                        Log.e(TAG, "onStartCommand: bad intent, not found device name extra")
+                        return super.onStartCommand(intent, flags, startId)
+                    }
+                    connect(deviceName)
+                }
+            }
+        }catch (e: Exception){
+            Log.e(TAG, "onStartCommand: execute action error", e)
         }
+//        if (cmd == 0){
+//            start()
+//        }else if(cmd == 1){
+//            playJob?.cancel()
+//            playJob = null
+//        }
         return super.onStartCommand(intent, flags, startId)
+    }
+
+    private fun connect(name: String) {
+//        val config = (application as Application).getAppConfig()
+//        val device = config.devices.find { it.name == name } ?: throw Exception("not found device: $name")
+        disconnect()
+//        SocketChannel.open(device.).let { channel ->
+//
+//        }
+    }
+
+    private fun disconnect() {
+        controlSocket?.close()
+        connected = false
     }
 
     private fun start(){

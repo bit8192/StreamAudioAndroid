@@ -45,6 +45,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat.requestPermissions
+import androidx.hilt.navigation.compose.hiltViewModel
 import cn.bincker.stream.sound.config.DeviceConfig
 import cn.bincker.stream.sound.entity.DeviceInfo
 import cn.bincker.stream.sound.ui.theme.StreamSoundTheme
@@ -53,8 +54,11 @@ import cn.bincker.stream.sound.utils.loadPrivateKey
 import cn.bincker.stream.sound.vm.DeviceListViewModel
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import dagger.hilt.android.AndroidEntryPoint
 
 private const val TAG = "MainActivity"
+
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     private var audioServiceBinder: AudioService.AudioServiceBinder? = null
     private val vm by viewModels<DeviceListViewModel>()
@@ -117,7 +121,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel = DeviceListViewModel()){
+fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel){
     val isRefresh by vm.isRefresh
     val pullToRefreshState = rememberPullToRefreshState()
     val context = LocalContext.current
@@ -181,7 +185,7 @@ private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLaunche
 @Preview
 @Composable
 fun PreviewMainApp(){
-    val vm = DeviceListViewModel()
+    val vm = hiltViewModel<DeviceListViewModel>()
     for (i in 0 until 10) {
         vm.deviceList.add(DeviceInfo(
             DeviceConfig().apply {
