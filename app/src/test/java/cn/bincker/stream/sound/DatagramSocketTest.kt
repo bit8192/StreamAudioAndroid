@@ -59,4 +59,28 @@ class DatagramSocketTest {
         val b = InetAddress.getByName("192.168.1.1")
         Assert.assertEquals(a, b)
     }
+
+    @Test
+    fun reverseIPLookup() {
+        // 测试反向 DNS 查询
+        val testIPs = listOf(
+            "127.0.0.1",
+            "8.8.8.8",
+            "1.1.1.1",
+            "192.168.10.155"
+        )
+
+        println("反向 DNS 查询测试:")
+        testIPs.forEach { ip ->
+            try {
+                val address = InetAddress.getByName(ip)
+                println("$ip:")
+                println("  hostName: ${address.hostName}")
+                println("  canonicalHostName: ${address.canonicalHostName}")
+                println("  isReachable: ${address.isReachable(1000)}")
+            } catch (e: Exception) {
+                println("$ip: 查询失败 - ${e.message}")
+            }
+        }
+    }
 }

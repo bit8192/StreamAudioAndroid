@@ -116,18 +116,18 @@ class MainActivity : ComponentActivity() {
                 Log.d("MainActivity", "No code scanned")
             }
         }
+
+        vm.refresh(this)
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel){
-    val isRefresh by vm.isRefresh
     val pullToRefreshState = rememberPullToRefreshState()
     val context = LocalContext.current
-    vm.refresh(context)
     Box(modifier = modifier.fillMaxSize()) {
-        PullToRefreshBox(isRefresh, onRefresh = {
+        PullToRefreshBox(vm.isRefresh.value, onRefresh = {
             vm.refresh(context)
         }, state = pullToRefreshState) {
             LazyColumn(modifier = Modifier
@@ -187,7 +187,7 @@ private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLaunche
 fun PreviewMainApp(){
     val vm = hiltViewModel<DeviceListViewModel>()
     for (i in 0 until 10) {
-        vm.deviceList.add(DeviceInfo(
+        vm.addDeviceInfo(DeviceInfo(
             DeviceConfig().apply {
                 name = "设备$i"
                 address = "192.168.1.${100 + i}:12345"

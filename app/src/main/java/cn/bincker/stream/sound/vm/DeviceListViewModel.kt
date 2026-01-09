@@ -2,35 +2,44 @@ package cn.bincker.stream.sound.vm
 
 import android.content.Context
 import android.util.Log
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.bincker.stream.sound.Application
 import cn.bincker.stream.sound.entity.DeviceInfo
 import cn.bincker.stream.sound.repository.AppConfigRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.InetAddress
+import javax.inject.Inject
 
 const val TAG = "DeviceListViewModel"
 @HiltViewModel
 class DeviceListViewModel @Inject constructor(
     private val appConfigRepository: AppConfigRepository
 ) : ViewModel() {
-    val isRefresh: MutableState<Boolean> = mutableStateOf(false)
-    val deviceList = mutableStateListOf<DeviceInfo>()
+    val _isRefresh = MutableStateFlow(false)
+    val isRefresh: StateFlow<Boolean> get() = _isRefresh.asStateFlow()
+    val deviceList: List<DeviceInfo> get() = appConfigRepository.deviceInfoList
+
+    fun addDeviceInfo(device: DeviceInfo) = appConfigRepository.addDeviceInfo(device)
 
     fun refresh(context: Context) {
         @Suppress("SimplifyNegatedBinaryExpression")
         if (!(context.applicationContext is Application)) return
         viewModelScope.launch {
-            isRefresh.value = true
+            _isRefresh.value = true
 
+            withContext(Dispatchers.IO) {
+                val addr = InetAddress.getByName("192.168.10.236")
+                Log.d(TAG, "refresh: addr=${addr.hostName}")
+            }
             try {
-                deviceList.clear()
+                appConfigRepository.refresh()
 //                val app = context.applicationContext as Application
 //                if (app.getAppConfig().devices.size == deviceList.size) app.refreshAppConfig()
 //                for (deviceConfig in app.getAppConfig().devices) {
@@ -54,7 +63,7 @@ class DeviceListViewModel @Inject constructor(
 //                }
                 Log.d(TAG, "devices size: ${deviceList.size}")
             }finally {
-                isRefresh.value = false
+                _isRefresh.value = false
             }
         }
     }

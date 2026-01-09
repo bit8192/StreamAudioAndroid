@@ -1,0 +1,25 @@
+package cn.bincker.stream.sound.entity
+
+import cn.bincker.stream.sound.Constant
+import cn.bincker.stream.sound.PORT
+import cn.bincker.stream.sound.config.DeviceConfig
+import java.net.InetSocketAddress
+import java.util.regex.Pattern
+
+data class PairDevice(
+    val pairCode: String,
+    val device: DeviceConfig
+){
+    companion object{
+        val URI_REGEX: Pattern = Pattern.compile("^${Constant.APPLICATION_URI_PREFIX}(\\w+)@([^:]+):(\\d+)$")
+        fun parseUri(uri: String): PairDevice{
+            val matcher = URI_REGEX.matcher(uri.trim())
+            if (!matcher.find()) throw Exception("invalid uri: $uri")
+            val pairCode = matcher.group(1) ?: ""
+            val host = matcher.group(2)
+            val port = matcher.group(3)?.toInt() ?: PORT
+            val address = InetSocketAddress(host, port)
+            return PairDevice(pairCode, DeviceConfig(address.hostName))
+        }
+    }
+}
