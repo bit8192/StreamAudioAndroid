@@ -133,5 +133,5 @@ class AppConfigRepository {
         }
     }
 
-    fun addDeviceInfo(device: Device) = _deviceList.add(device)
+    fun addDevice(device: Device) = _deviceList.add(device)
 }

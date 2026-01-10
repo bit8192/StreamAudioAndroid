@@ -91,13 +91,6 @@ class MainActivity : ComponentActivity() {
         bindService(Intent(this, AudioService::class.java), object: ServiceConnection{
             override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
                 audioServiceBinder = service as AudioService.AudioServiceBinder?
-                if (audioServiceBinder?.isPlay() == false) {
-                    startForegroundService(
-                        Intent(this@MainActivity, AudioService::class.java).apply {
-                            putExtra("cmd", 0)
-                        }
-                    )
-                }
             }
 
             override fun onServiceDisconnected(name: ComponentName?) {

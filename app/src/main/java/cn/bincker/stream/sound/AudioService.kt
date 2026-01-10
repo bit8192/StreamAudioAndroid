@@ -14,25 +14,12 @@ import cn.bincker.stream.sound.repository.AppConfigRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.net.NetworkInterface
-import java.net.SocketAddress
-import java.net.StandardProtocolFamily
-import java.net.StandardSocketOptions
-import java.nio.ByteBuffer
-import java.nio.channels.DatagramChannel
-import java.nio.channels.SocketChannel
 import javax.inject.Inject
 
-const val PORT = 8888
-
-const val PACKAGE_SIZE: Int = 1200
 
 const val INTENT_EXTRA_KEY_CMD = "cmd"
 const val INTENT_EXTRA_KEY_DEVICE_NAME = "device-name"
@@ -53,15 +40,8 @@ class AudioService @Inject constructor(
     private val appConfigRepository: AppConfigRepository
 ) : Service() {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private var play = false
-    private var receiveMessageJob: Job? = null
-    private var datagramChannel: DatagramChannel? = null
-    private val localAddressList = mutableListOf<InetAddress>()
-    private var controlSocket: SocketChannel? = null
-    private var connected = false
 
     inner class AudioServiceBinder: Binder(){
-        fun isPlay() = play
         fun pairDevice(uri: String){
             this@AudioService.startService(Intent(this@AudioService, AudioService::class.java).apply {
                 putExtra(INTENT_EXTRA_KEY_CMD, AudioServiceCommandEnum.PAIR)
@@ -93,19 +73,13 @@ class AudioService @Inject constructor(
                     }
                     AudioServiceCommandEnum.CONNECT -> {
                         val deviceName = intent.getStringExtra(INTENT_EXTRA_KEY_DEVICE_NAME) ?: throw Exception("bad connect command, not found device name extra")
-//                    connect(deviceName)
+                        connect(deviceName)
                     }
                 }
             }catch (e: Exception){
                 Log.e(TAG, "onStartCommand: execute action error", e)
             }
         }
-//        if (cmd == 0){
-//            start()
-//        }else if(cmd == 1){
-//            playJob?.cancel()
-//            playJob = null
-//        }
         return super.onStartCommand(intent, flags, startId)
     }
 
@@ -113,16 +87,28 @@ class AudioService @Inject constructor(
         withContext(Dispatchers.IO) {
             val pairDevice = PairDevice.parseUri(uri)
             val device = Device(pairDevice.device)
-            connect(device)
+            appConfigRepository.addDevice(device)
+            device.connect()
+            device.ecdh(appConfigRepository.ecdhKeyPair)
         }
     }
 
-    private fun disconnect() {
-        controlSocket?.close()
-        connected = false
+    private suspend fun connect(deviceName: String){
+        withContext(Dispatchers.IO) {
+            val device = appConfigRepository.deviceList.find { it.config.name == deviceName }
+                ?: throw Exception("device [$deviceName] not found")
+            device.connect()
+            device.ecdh(appConfigRepository.ecdhKeyPair)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        scope.cancel()
     }
 
     private fun start(){
+        /*
         Log.d("AudioService.start", "start: play=$play")
         if (play) return
         stop()
@@ -140,7 +126,7 @@ class AudioService @Inject constructor(
                 datagramChannel?.setOption(StandardSocketOptions.IP_MULTICAST_IF, networkInterface)
             }
         }
-        /*playJob = scope.launch {
+        playJob = scope.launch {
             suspendCancellableCoroutine { coroutine ->
                 var audioTrack: AudioTrack? = null
                 var channel: SocketChannel? = null
@@ -255,51 +241,4 @@ class AudioService @Inject constructor(
         }*/
     }
 
-    private suspend fun sendMessage(address: InetAddress, data: ByteArray) {
-        withContext(Dispatchers.IO) {
-            datagramChannel?.send(ByteBuffer.wrap(data), InetSocketAddress(address, PORT))
-        }
-    }
-
-    private fun startReceiveMessage(){
-        Log.d("AudioService.startReceiveMessage", "start receive message")
-        receiveMessageJob = scope.launch {
-            val buffer = ByteBuffer.allocate(PACKAGE_SIZE)
-            datagramChannel?.use { channel->
-                while (play){
-                    try {
-                        buffer.clear()
-                        val address: SocketAddress = channel.receive(buffer) ?: continue
-                        if (address is InetSocketAddress){
-                            if (localAddressList.any { it.address.contentEquals(address.address.address) }) continue
-                        }
-
-                        buffer.flip()
-                        if (buffer.remaining() < 1) continue
-
-                        Log.d(
-                            "AudioService.receiveMessage",
-                            "receiveMessage: ${buffer.array().copyOf(buffer.remaining()).joinToString("") { "%02X".format(it) }}"
-                        )
-                        when(buffer.get()){
-                            PACK_TYPE_PONG -> {
-//                                scanCallback?.invoke(DeviceConfig(if (address is InetSocketAddress) address.hostName else address.toString(), address))
-                            }
-                        }
-                    }catch (e: Exception){
-                        Log.w("AudioService.receiveMessage", "receiveMessage: receive message error", e)
-                    }
-                }
-            }
-        }
-    }
-
-    private fun stop(){
-        play = false
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        scope.cancel()
-    }
 }

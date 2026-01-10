@@ -26,7 +26,7 @@ class DeviceListViewModel @Inject constructor(
     val isRefresh: StateFlow<Boolean> get() = _isRefresh.asStateFlow()
     val deviceList: List<Device> get() = appConfigRepository.deviceList
 
-    fun addDeviceInfo(device: Device) = appConfigRepository.addDeviceInfo(device)
+    fun addDeviceInfo(device: Device) = appConfigRepository.addDevice(device)
 
     fun refresh(context: Context) {
         @Suppress("SimplifyNegatedBinaryExpression")
