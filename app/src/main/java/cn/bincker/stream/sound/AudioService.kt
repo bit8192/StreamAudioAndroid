@@ -7,10 +7,8 @@ import android.app.Service
 import android.content.Intent
 import android.os.Binder
 import android.util.Log
-import android.widget.Toast
 import androidx.core.content.getSystemService
-import cn.bincker.stream.sound.config.DeviceConfig
-import cn.bincker.stream.sound.entity.DeviceInfo
+import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.entity.PairDevice
 import cn.bincker.stream.sound.repository.AppConfigRepository
 import dagger.hilt.android.AndroidEntryPoint
@@ -19,47 +17,22 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
-import java.net.Socket
 import java.net.SocketAddress
 import java.net.StandardProtocolFamily
 import java.net.StandardSocketOptions
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
 import java.nio.channels.SocketChannel
-import java.security.KeyPair
-import java.security.KeyPairGenerator
 import javax.inject.Inject
 
 const val PORT = 8888
 
 const val PACKAGE_SIZE: Int = 1200
-
-const val PACK_TYPE_PING: Byte = 0x00
-const val PACK_TYPE_PONG: Byte = 0x01
-
-
-const val PACK_TYPE_ECDH_REQUEST: Byte =              0b00010000
-const val PACK_TYPE_ECDH_RESPONSE: Byte =             0b00010001
-const val PACK_TYPE_PAIR_REQUEST: Byte =              0b00010010
-const val PACK_TYPE_PAIR_RESPONSE: Byte =             0b00010011
-
-
-const val PACK_TYPE_AUDIO_START: Byte =   0b00100000
-const val PACK_TYPE_AUDIO_INFO: Byte =    0b00100001
-const val PACK_TYPE_AUDIO_STOP: Byte =    0b00100010
-const val PACK_TYPE_AUDIO_DATA: Byte =    0b00100100
-
-
-const val PACK_TYPE_ENCRYPTED_DATA: Byte =    0b01000000
-const val PACK_TYPE_SIGN_DATA: Byte =    0b01000001
-
-val BROADCAST_ADDRESS: InetAddress = InetAddress.getByName("255.255.255.255")
 
 const val INTENT_EXTRA_KEY_CMD = "cmd"
 const val INTENT_EXTRA_KEY_DEVICE_NAME = "device-name"
@@ -139,20 +112,8 @@ class AudioService @Inject constructor(
     private suspend fun pair(uri: String){
         withContext(Dispatchers.IO) {
             val pairDevice = PairDevice.parseUri(uri)
-            val deviceInfo = DeviceInfo(pairDevice.device)
-            connect(deviceInfo)
-        }
-    }
-
-    private suspend fun connect(deviceInfo: DeviceInfo) {
-        withContext(Dispatchers.IO) {
-            deviceInfo.channel?.let {
-                if (deviceInfo.connected){
-
-                }
-            }
-            SocketChannel.open(deviceInfo.socketAddress).let { channel ->
-            }
+            val device = Device(pairDevice.device)
+            connect(device)
         }
     }
 

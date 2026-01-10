@@ -3,9 +3,8 @@ package cn.bincker.stream.sound.repository
 import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.snapshots.SnapshotStateList
 import cn.bincker.stream.sound.config.AppConfig
-import cn.bincker.stream.sound.entity.DeviceInfo
+import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.utils.generatePrivateKey
 import cn.bincker.stream.sound.utils.generateX25519KeyPair
 import cn.bincker.stream.sound.utils.loadPrivateKey
@@ -59,11 +58,11 @@ class AppConfigRepository {
     private constructor(context: Context){
         this.context = context
     }
-    val edchKeyPair: AsymmetricCipherKeyPair = generateX25519KeyPair()
+    val ecdhKeyPair: AsymmetricCipherKeyPair = generateX25519KeyPair()
     private lateinit var _privateKey: StateFlow<Ed25519PrivateKeyParameters>
     val privateKey: StateFlow<Ed25519PrivateKeyParameters> get() = _privateKey
-    private val _deviceInfoList = mutableStateListOf<DeviceInfo>()
-    val deviceInfoList: List<DeviceInfo> get() = _deviceInfoList
+    private val _deviceList = mutableStateListOf<Device>()
+    val deviceList: List<Device> get() = _deviceList
 
     companion object{
         init {
@@ -82,7 +81,7 @@ class AppConfigRepository {
             .filter { it.isNotBlank() }
             .map { loadPrivateKey(it) }
             .stateIn(CoroutineScope(Dispatchers.Default))
-        appConfig.value?.devices?.map { DeviceInfo(it) }?.let { _deviceInfoList.addAll(it) }
+        appConfig.value?.devices?.map { Device(it) }?.let { _deviceList.addAll(it) }
     }
 
     suspend fun getConfig() = _appConfig.value ?: mutex.withLock {
@@ -134,5 +133,5 @@ class AppConfigRepository {
         }
     }
 
-    fun addDeviceInfo(deviceInfo: DeviceInfo) = _deviceInfoList.add(deviceInfo)
+    fun addDeviceInfo(device: Device) = _deviceList.add(device)
 }

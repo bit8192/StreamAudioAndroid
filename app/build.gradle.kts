@@ -1,9 +1,18 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
     id("com.google.dagger.hilt.android")
+}
+
+// 读取统一版本配置
+val versionPropsFile = rootProject.file("../version.properties")
+val versionProps = Properties()
+if (versionPropsFile.exists()) {
+    versionPropsFile.inputStream().use { versionProps.load(it) }
 }
 
 android {
@@ -14,8 +23,8 @@ android {
         applicationId = "cn.bincker.stream.sound"
         minSdk = 35
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = versionProps.getProperty("VERSION_CODE", "1").toInt()
+        versionName = versionProps.getProperty("VERSION_NAME", "1.0.0")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

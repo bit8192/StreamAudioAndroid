@@ -35,7 +35,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -47,7 +46,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat.requestPermissions
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.bincker.stream.sound.config.DeviceConfig
-import cn.bincker.stream.sound.entity.DeviceInfo
+import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.ui.theme.StreamSoundTheme
 import cn.bincker.stream.sound.utils.generatePrivateKey
 import cn.bincker.stream.sound.utils.loadPrivateKey
@@ -187,7 +186,7 @@ private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLaunche
 fun PreviewMainApp(){
     val vm = hiltViewModel<DeviceListViewModel>()
     for (i in 0 until 10) {
-        vm.addDeviceInfo(DeviceInfo(
+        vm.addDeviceInfo(Device(
             DeviceConfig().apply {
                 name = "设备$i"
                 address = "192.168.1.${100 + i}:12345"

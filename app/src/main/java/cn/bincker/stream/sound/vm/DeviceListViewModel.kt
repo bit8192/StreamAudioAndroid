@@ -5,7 +5,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.bincker.stream.sound.Application
-import cn.bincker.stream.sound.entity.DeviceInfo
+import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.repository.AppConfigRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -24,9 +24,9 @@ class DeviceListViewModel @Inject constructor(
 ) : ViewModel() {
     val _isRefresh = MutableStateFlow(false)
     val isRefresh: StateFlow<Boolean> get() = _isRefresh.asStateFlow()
-    val deviceList: List<DeviceInfo> get() = appConfigRepository.deviceInfoList
+    val deviceList: List<Device> get() = appConfigRepository.deviceList
 
-    fun addDeviceInfo(device: DeviceInfo) = appConfigRepository.addDeviceInfo(device)
+    fun addDeviceInfo(device: Device) = appConfigRepository.addDeviceInfo(device)
 
     fun refresh(context: Context) {
         @Suppress("SimplifyNegatedBinaryExpression")
