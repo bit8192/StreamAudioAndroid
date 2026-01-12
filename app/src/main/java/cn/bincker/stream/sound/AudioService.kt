@@ -89,8 +89,13 @@ class AudioService : Service() {
             val pairDevice = PairDevice.parseUri(uri)
             val device = Device(pairDevice.device)
             appConfigRepository.addDevice(device)
+            Log.d(TAG, "pair: connect start")
             device.connect()
+            device.startListening(scope)
+            Log.d(TAG, "pair: connect end")
+            Log.d(TAG, "pair: ecdh start")
             device.ecdh(appConfigRepository.ecdhKeyPair)
+            Log.d(TAG, "pair: ecdh end")
         }
     }
 
@@ -99,6 +104,7 @@ class AudioService : Service() {
             val device = appConfigRepository.deviceList.find { it.config.name == deviceName }
                 ?: throw Exception("device [$deviceName] not found")
             device.connect()
+            device.startListening(scope)
             device.ecdh(appConfigRepository.ecdhKeyPair)
         }
     }

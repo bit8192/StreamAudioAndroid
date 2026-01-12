@@ -22,7 +22,7 @@ data class PairDevice(
             val port = matcher.group(3)?.toInt() ?: DEFAULT_PORT
             val address = InetSocketAddress(host, port)
             Log.d(TAG, "parseUri: pairCode=$pairCode\thost=$host\tport=$port\t")
-            return PairDevice(pairCode, DeviceConfig(address.hostName))
+            return PairDevice(pairCode, DeviceConfig(address.hostName, "$host:$port"))
         }
     }
 }

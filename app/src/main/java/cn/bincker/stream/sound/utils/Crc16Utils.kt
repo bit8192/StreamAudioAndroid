@@ -140,7 +140,10 @@ fun ByteBuffer.putCrc16(offset: Int, crc16: Int) {
  */
 fun ByteBuffer.putCrc16() {
     val pos = position()
+    val limit = limit()
     flip()
     val value = crc16()
+    position(pos)
+    limit(limit)
     putCrc16(value)
 }

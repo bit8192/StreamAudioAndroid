@@ -4,7 +4,9 @@ import android.util.Log
 import cn.bincker.stream.sound.ProtocolMagicEnum.ECDH
 import cn.bincker.stream.sound.ProtocolMagicEnum.ECDH_RESPONSE
 import cn.bincker.stream.sound.config.DeviceConfig
+import cn.bincker.stream.sound.utils.hmacDeriveKey
 import cn.bincker.stream.sound.utils.loadPublicKey
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -56,22 +58,28 @@ class Device(
         return InetSocketAddress(host, port)
     }
 
-    suspend fun connect() = withContext(Dispatchers.IO) {
-        channel?.let {
-            if (connected){
-                connected = false
+    suspend fun connect() {
+        withContext(Dispatchers.IO) {
+            channel?.let {
+                if (connected){
+                    connected = false
+                }
+                if(it.isOpen) it.close()
+                channel = null
             }
-            if(it.isOpen) it.close()
-            channel = null
+            Log.d(TAG, "connect: ${config.address}")
+            channel = SocketChannel.open(socketAddress)
+            connected = true
         }
-        Log.d(TAG, "connect: ${config.address}")
-        channel = SocketChannel.open(socketAddress)
-        connected = true
-        launch {
+    }
+
+    fun startListening(scope: CoroutineScope): Job {
+        return scope.launch(Dispatchers.IO) {
             listening()
         }
     }
 
+    @OptIn(ExperimentalStdlibApi::class)
     suspend fun listening() = withChannel {
         val buffer = ByteBuffer.allocate(2048)
         val msf = MutableSharedFlow<Message<*>?>(0, 10)
@@ -79,9 +87,16 @@ class Device(
         try {
             while (connected && read(buffer) != -1) {
                 buffer.flip()
-                buffer.getMessage()?.let { msf.emit(it) }
+                val msg = buffer.getMessage()
+                if (msg != null){
+                    msf.emit(msg)
+                }else{
+                    Log.d(TAG, "listening: invalid msg data=${buffer.array().copyOfRange(buffer.position(), buffer.position() + buffer.limit()).toHexString()}")
+                }
                 buffer.compact()
             }
+        }catch (e: Exception){
+            Log.e(TAG, "listening: receive message error", e)
         }finally {
             messageFlow = null
             if(connected) disconnect()
@@ -110,6 +125,7 @@ class Device(
         }
     }
 
+    @OptIn(ExperimentalStdlibApi::class)
     suspend fun ecdh(keyPair: AsymmetricCipherKeyPair) {
         withChannel {
             val msgId = messageIdNum.getAndIncrement()
@@ -124,9 +140,17 @@ class Device(
             } ?: throw Exception("device [${config.name}] ecdh no response received")
             if(response.body is ByteArrayMessageBody) {
                 val ecdhKey = X25519PublicKeyParameters(response.body.data, 0)
-                (keyPair.private as X25519PrivateKeyParameters).generateSecret(ecdhKey, sessionKey, 0)
+
+                // 生成原始 X25519 共享密钥
+                val rawSharedSecret = ByteArray(32)
+                (keyPair.private as X25519PrivateKeyParameters).generateSecret(ecdhKey, rawSharedSecret, 0)
+
+                // 使用 HMAC-SHA256 派生最终会话密钥 (与 C++ 端保持一致)
+                val derivedKey = hmacDeriveKey(rawSharedSecret, salt = ByteArray(0))
+                derivedKey.copyInto(sessionKey, 0, 0, 32)
+
                 _ecdhCompleted = true
-                Log.d(TAG, "ecdh: device [${config.name}] ecdh success")
+                Log.d(TAG, "ecdh: device [${config.name}] ecdh success, sessionKey=${sessionKey.toHexString()}")
             }
         }
     }

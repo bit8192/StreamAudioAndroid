@@ -1,14 +1,19 @@
 package cn.bincker.stream.sound.entity
 
+import android.util.Log
 import cn.bincker.stream.sound.BuildConfig
 import cn.bincker.stream.sound.ProtocolMagicEnum
+import cn.bincker.stream.sound.utils.HexUtils
 import cn.bincker.stream.sound.utils.getCrc16
 import cn.bincker.stream.sound.utils.putCrc16
 import java.nio.ByteBuffer
 import java.nio.channels.SocketChannel
 
+const val TAG = "Message"
+
 interface MessageBody {
     fun toByteArray(): ByteArray
+    fun length(): Int
 }
 
 data class ByteArrayMessageBody(
@@ -29,6 +34,8 @@ data class ByteArrayMessageBody(
     override fun hashCode(): Int {
         return data.contentHashCode()
     }
+
+    override fun length() = data.size
 }
 
 data class Message<T: MessageBody>(
@@ -54,7 +61,7 @@ data class Message<T: MessageBody>(
                 version = BuildConfig.VERSION_CODE,
                 queueNum = queueNum,
                 id = id,
-                packLength = 0,
+                packLength = body.length(),
                 body = body,
                 crc = 0
             )
@@ -62,8 +69,10 @@ data class Message<T: MessageBody>(
     }
 }
 
+@OptIn(ExperimentalStdlibApi::class)
 fun SocketChannel.writeMessage(message: Message<*>) {
-    write(ByteBuffer.allocate(Message.minLength + message.packLength).apply {
+    Log.d(TAG, "writeMessage: $message")
+    ByteBuffer.allocate(Message.minLength + message.packLength).apply {
         put(message.magic.magic)
         putInt(message.version)
         putInt(message.queueNum)
@@ -71,8 +80,13 @@ fun SocketChannel.writeMessage(message: Message<*>) {
         val bodyBytes = message.body.toByteArray()
         putInt(bodyBytes.size)
         put(bodyBytes)
+        Log.d(TAG, "writeMessage: pos=%d\tlimit=%d".format(position(), limit()))
         putCrc16()
-    })
+    }.let {
+        it.flip()
+        Log.d(TAG, "writeMessage: ${it.array().toHexString()}")
+        write(it)
+    }
 }
 
 fun ByteBuffer.getMessage(): Message<ByteArrayMessageBody>? {
