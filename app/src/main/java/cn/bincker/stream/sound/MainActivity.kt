@@ -35,6 +35,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -68,7 +69,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             StreamSoundTheme {
-                Page(vm)
+                Page(vm, barcodeLauncher)
             }
         }
     }
@@ -118,8 +119,9 @@ class MainActivity : ComponentActivity() {
 fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel){
     val pullToRefreshState = rememberPullToRefreshState()
     val context = LocalContext.current
+    val refresh = vm.isRefresh.collectAsState()
     Box(modifier = modifier.fillMaxSize()) {
-        PullToRefreshBox(vm.isRefresh.value, onRefresh = {
+        PullToRefreshBox(refresh.value, onRefresh = {
             vm.refresh(context)
         }, state = pullToRefreshState) {
             LazyColumn(modifier = Modifier

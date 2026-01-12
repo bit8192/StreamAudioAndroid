@@ -36,15 +36,15 @@ enum class AudioServiceCommandEnum {
 private const val TAG = "AudioService"
 
 @AndroidEntryPoint
-class AudioService @Inject constructor(
-    private val appConfigRepository: AppConfigRepository
-) : Service() {
+class AudioService : Service() {
+    @Inject
+    lateinit var appConfigRepository: AppConfigRepository
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     inner class AudioServiceBinder: Binder(){
         fun pairDevice(uri: String){
             this@AudioService.startService(Intent(this@AudioService, AudioService::class.java).apply {
-                putExtra(INTENT_EXTRA_KEY_CMD, AudioServiceCommandEnum.PAIR)
+                putExtra(INTENT_EXTRA_KEY_CMD, AudioServiceCommandEnum.PAIR.name)
                 putExtra(INTENT_EXTRA_KEY_PAIR_URI, uri)
             })
         }
@@ -85,6 +85,7 @@ class AudioService @Inject constructor(
 
     private suspend fun pair(uri: String){
         withContext(Dispatchers.IO) {
+            Log.d(TAG, "pair: $uri")
             val pairDevice = PairDevice.parseUri(uri)
             val device = Device(pairDevice.device)
             appConfigRepository.addDevice(device)

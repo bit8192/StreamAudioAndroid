@@ -64,6 +64,7 @@ class Device(
             if(it.isOpen) it.close()
             channel = null
         }
+        Log.d(TAG, "connect: ${config.address}")
         channel = SocketChannel.open(socketAddress)
         connected = true
         launch {

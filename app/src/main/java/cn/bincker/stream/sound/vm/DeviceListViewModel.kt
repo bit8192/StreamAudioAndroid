@@ -22,7 +22,7 @@ const val TAG = "DeviceListViewModel"
 class DeviceListViewModel @Inject constructor(
     private val appConfigRepository: AppConfigRepository
 ) : ViewModel() {
-    val _isRefresh = MutableStateFlow(false)
+    private val _isRefresh = MutableStateFlow(false)
     val isRefresh: StateFlow<Boolean> get() = _isRefresh.asStateFlow()
     val deviceList: List<Device> get() = appConfigRepository.deviceList
 
