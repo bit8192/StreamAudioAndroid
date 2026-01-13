@@ -1,12 +1,16 @@
 package cn.bincker.stream.sound.vm
 
 import android.content.Context
+import android.util.Base64
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.bincker.stream.sound.Application
+import cn.bincker.stream.sound.config.DeviceConfig
 import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.repository.AppConfigRepository
+import cn.bincker.stream.sound.utils.generateEd25519AsBase64
+import cn.bincker.stream.sound.utils.loadPrivateEd25519
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +30,20 @@ class DeviceListViewModel @Inject constructor(
     val isRefresh: StateFlow<Boolean> get() = _isRefresh.asStateFlow()
     val deviceList: List<Device> get() = appConfigRepository.deviceList
 
-    fun addDeviceInfo(device: Device) = appConfigRepository.addDevice(device)
+    fun addDeviceConfig(device: Device) = appConfigRepository.addDevice(device)
+
+    fun addTestDevices() {
+        for (i in 0 until 10) {
+            addDeviceConfig(Device(
+                appConfigRepository,
+                DeviceConfig().apply {
+                    name = "设备$i"
+                    address = "192.168.1.${100 + i}:12345"
+                    publicKey = Base64.encodeToString(loadPrivateEd25519(generateEd25519AsBase64()).generatePublicKey().encoded, Base64.DEFAULT)
+                }
+            ))
+        }
+    }
 
     fun refresh(context: Context) {
         @Suppress("SimplifyNegatedBinaryExpression")

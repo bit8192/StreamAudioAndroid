@@ -4,25 +4,23 @@ import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import cn.bincker.stream.sound.config.AppConfig
+import cn.bincker.stream.sound.config.DeviceConfig
 import cn.bincker.stream.sound.entity.Device
-import cn.bincker.stream.sound.utils.generatePrivateKey
+import cn.bincker.stream.sound.utils.generateEd25519AsBase64
 import cn.bincker.stream.sound.utils.generateX25519KeyPair
-import cn.bincker.stream.sound.utils.loadPrivateKey
+import cn.bincker.stream.sound.utils.loadPrivateEd25519
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.yaml.snakeyaml.LoaderOptions
 import org.yaml.snakeyaml.Yaml
@@ -59,8 +57,14 @@ class AppConfigRepository {
         this.context = context
     }
     val ecdhKeyPair: AsymmetricCipherKeyPair = generateX25519KeyPair()
-    private lateinit var _privateKey: StateFlow<Ed25519PrivateKeyParameters>
-    val privateKey: StateFlow<Ed25519PrivateKeyParameters> get() = _privateKey
+    private lateinit var _privateKey: Ed25519PrivateKeyParameters
+    val privateKey get() = _privateKey
+    private lateinit var _publicKey: Ed25519PublicKeyParameters
+    val publicKey get() = _publicKey
+    //配置文件中的设备列表
+    private val _deviceConfigList = mutableStateListOf<DeviceConfig>()
+    val deviceConfigList: List<DeviceConfig> get() = _deviceConfigList
+    //连接的设备列表
     private val _deviceList = mutableStateListOf<Device>()
     val deviceList: List<Device> get() = _deviceList
 
@@ -76,23 +80,26 @@ class AppConfigRepository {
 
     suspend fun init() {
         refresh()
-        _privateKey = appConfig.filterNotNull()
-            .map { it.privateKey }
-            .filter { it.isNotBlank() }
-            .map { loadPrivateKey(it) }
-            .stateIn(CoroutineScope(Dispatchers.Default))
-        appConfig.value?.devices?.map { Device(it) }?.let { _deviceList.addAll(it) }
     }
 
-    suspend fun getConfig() = _appConfig.value ?: mutex.withLock {
-        _appConfig.value ?: loadAppConfig().also { _appConfig.value = it }
-    }
+    suspend fun getConfig() = _appConfig.value ?: refreshAndGetConfig()
 
     suspend fun refresh() {
         refreshAndGetConfig()
     }
 
-    suspend fun refreshAndGetConfig() = mutex.withLock { loadAppConfig().also { _appConfig.value = it } }
+    suspend fun refreshAndGetConfig() = mutex.withLock { loadAppConfig().also {
+        _appConfig.value = it
+        if (it.privateKey.isNotBlank()){
+            _privateKey = loadPrivateEd25519(it.privateKey)
+        }else{
+            it.privateKey = generateEd25519AsBase64()
+            saveAppConfig(it)
+        }
+        _publicKey = _privateKey.generatePublicKey()
+        _deviceConfigList.clear()
+        appConfig.value?.devices?.let { configs-> _deviceConfigList.addAll(configs) }
+    }}
 
     fun getConfigFilePath() = Path(context.filesDir.path,CONFIG_FILE_PATH)
 
@@ -115,7 +122,7 @@ class AppConfigRepository {
 
     suspend fun newAppConfig(): AppConfig {
         return AppConfig().also {
-            it.privateKey = generatePrivateKey()
+            it.privateKey = generateEd25519AsBase64()
             saveAppConfig(it)
         }
     }
@@ -133,5 +140,16 @@ class AppConfigRepository {
         }
     }
 
+    suspend fun saveAppConfig() {
+        _appConfig.value?.let {
+            it.devices = deviceConfigList
+            saveAppConfig(it)
+        }
+    }
+
+    suspend fun addDeviceConfig(config: DeviceConfig) {
+        _deviceConfigList.add(config)
+        saveAppConfig()
+    }
     fun addDevice(device: Device) = _deviceList.add(device)
 }

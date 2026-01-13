@@ -3,10 +3,10 @@ package cn.bincker.stream.sound
 import java.nio.ByteBuffer
 
 enum class ProtocolMagicEnum {
-    ECDH,
-    ECDH_RESPONSE,
     PAIR,
     PAIR_RESPONSE,
+    ECDH,
+    ECDH_RESPONSE,
     AUTHENTICATION,
     AUTHENTICATION_RESPONSE,
     PLAY,

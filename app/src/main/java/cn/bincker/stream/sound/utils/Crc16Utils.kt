@@ -119,9 +119,10 @@ fun ByteBuffer.getCrc16(offset: Int): Int {
  *
  * @param crc16 要写入的 CRC16 值
  */
-fun ByteBuffer.putCrc16(crc16: Int) {
+fun ByteBuffer.putCrc16(crc16: Int): ByteBuffer {
     put((crc16 shr 8).toByte())
     put(crc16.toByte())
+    return this
 }
 
 /**
@@ -130,15 +131,16 @@ fun ByteBuffer.putCrc16(crc16: Int) {
  * @param offset 写入位置的偏移量
  * @param crc16 要写入的 CRC16 值
  */
-fun ByteBuffer.putCrc16(offset: Int, crc16: Int) {
+fun ByteBuffer.putCrc16(offset: Int, crc16: Int): ByteBuffer {
     put(offset, (crc16 shr 8).toByte())
     put(offset + 1, crc16.toByte())
+    return this
 }
 
 /**
  * 计算0位置到当前位置的 CRC16值 到当前位置，并移动 position
  */
-fun ByteBuffer.putCrc16() {
+fun ByteBuffer.putCrc16(): ByteBuffer {
     val pos = position()
     val limit = limit()
     flip()
@@ -146,4 +148,5 @@ fun ByteBuffer.putCrc16() {
     position(pos)
     limit(limit)
     putCrc16(value)
+    return this
 }

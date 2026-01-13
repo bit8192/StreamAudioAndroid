@@ -49,8 +49,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import cn.bincker.stream.sound.config.DeviceConfig
 import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.ui.theme.StreamSoundTheme
-import cn.bincker.stream.sound.utils.generatePrivateKey
-import cn.bincker.stream.sound.utils.loadPrivateKey
+import cn.bincker.stream.sound.utils.generateEd25519AsBase64
+import cn.bincker.stream.sound.utils.loadPrivateEd25519
 import cn.bincker.stream.sound.vm.DeviceListViewModel
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -180,15 +180,7 @@ private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLaunche
 @Composable
 fun PreviewMainApp(){
     val vm = hiltViewModel<DeviceListViewModel>()
-    for (i in 0 until 10) {
-        vm.addDeviceInfo(Device(
-            DeviceConfig().apply {
-                name = "设备$i"
-                address = "192.168.1.${100 + i}:12345"
-                publicKey = Base64.encodeToString(loadPrivateKey(generatePrivateKey()).generatePublicKey().encoded, Base64.DEFAULT)
-            }
-        ))
-    }
+    vm.addTestDevices()
     // Preview 中也展示顶部栏
     Page(vm = vm)
 }

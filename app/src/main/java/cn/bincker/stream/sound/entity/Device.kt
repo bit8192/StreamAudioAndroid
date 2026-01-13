@@ -1,11 +1,14 @@
 package cn.bincker.stream.sound.entity
 
 import android.util.Log
+import cn.bincker.stream.sound.AudioService
+import cn.bincker.stream.sound.ProtocolMagicEnum
 import cn.bincker.stream.sound.ProtocolMagicEnum.ECDH
 import cn.bincker.stream.sound.ProtocolMagicEnum.ECDH_RESPONSE
 import cn.bincker.stream.sound.config.DeviceConfig
+import cn.bincker.stream.sound.repository.AppConfigRepository
 import cn.bincker.stream.sound.utils.hmacDeriveKey
-import cn.bincker.stream.sound.utils.loadPublicKey
+import cn.bincker.stream.sound.utils.loadPublicEd25519
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,6 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
@@ -27,6 +31,7 @@ import java.nio.channels.SocketChannel
 import java.util.concurrent.atomic.AtomicInteger
 
 class Device(
+    val appConfigRepository: AppConfigRepository,
     val config: DeviceConfig,
     var channel: SocketChannel? = null,
     val msgWaitTimeout: Long = 5000,
@@ -39,7 +44,7 @@ class Device(
     val isConnected get() = connected
 
     val publicKey: Ed25519PublicKeyParameters? = config.publicKey.let {
-        if (it.isBlank()) null else loadPublicKey(it)
+        if (it.isBlank()) null else loadPublicEd25519(it)
     }
 
     private var _ecdhCompleted = false
@@ -125,16 +130,26 @@ class Device(
         }
     }
 
-    @OptIn(ExperimentalStdlibApi::class)
-    suspend fun ecdh(keyPair: AsymmetricCipherKeyPair) {
+    suspend fun pair() {
         withChannel {
             val msgId = messageIdNum.getAndIncrement()
-            writeMessage(Message.build(
-                ECDH,
-                messageQueueNum.getAndIncrement(),
+            writeMessage(messageQueueNum, Message.build(
+                ProtocolMagicEnum.PAIR,
                 msgId,
-                ByteArrayMessageBody((keyPair.public as X25519PublicKeyParameters).encoded)
-            ))
+                ByteArrayMessageBody(appConfigRepository.publicKey.encoded)
+            ), appConfigRepository.privateKey)
+        }
+    }
+
+    @OptIn(ExperimentalStdlibApi::class)
+    suspend fun ecdh() {
+        withChannel {
+            val msgId = messageIdNum.getAndIncrement()
+            writeMessage(messageQueueNum, Message.build(
+                ECDH,
+                msgId,
+                ByteArrayMessageBody(appConfigRepository.publicKey.encoded)
+            ), appConfigRepository.privateKey)
             val response = withTimeout(msgWaitTimeout) {
                 messageFlow?.filter { it?.magic == ECDH_RESPONSE && it.id == msgId }?.first()
             } ?: throw Exception("device [${config.name}] ecdh no response received")
@@ -143,7 +158,7 @@ class Device(
 
                 // 生成原始 X25519 共享密钥
                 val rawSharedSecret = ByteArray(32)
-                (keyPair.private as X25519PrivateKeyParameters).generateSecret(ecdhKey, rawSharedSecret, 0)
+                (appConfigRepository.ecdhKeyPair.private as X25519PrivateKeyParameters).generateSecret(ecdhKey, rawSharedSecret, 0)
 
                 // 使用 HMAC-SHA256 派生最终会话密钥 (与 C++ 端保持一致)
                 val derivedKey = hmacDeriveKey(rawSharedSecret, salt = ByteArray(0))

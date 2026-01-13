@@ -1,32 +1,45 @@
 package cn.bincker.stream.sound.utils
 
-import android.util.Base64
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.KeyGenerationParameters
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.generators.X25519KeyPairGenerator
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+import org.bouncycastle.math.ec.rfc8032.Ed25519
+import java.nio.ByteBuffer
 import java.security.SecureRandom
+import java.util.Base64
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
-
-fun generatePrivateKey(): String {
+fun generateEd25519KeyPair(): AsymmetricCipherKeyPair {
     val keyPairGenerator = Ed25519KeyPairGenerator()
     keyPairGenerator.init(KeyGenerationParameters(SecureRandom(), 256))
-    return keyPairGenerator.generateKeyPair().let {
-        Base64.encodeToString((it.private as Ed25519PrivateKeyParameters).encoded, Base64.DEFAULT)
-    }
+    return keyPairGenerator.generateKeyPair()
 }
 
-fun loadPrivateKey(key: String) = Ed25519PrivateKeyParameters(Base64.decode(key, Base64.DEFAULT))
+fun generateEd25519AsBase64(): String = generateX25519KeyPair().let {
+    Base64.getEncoder().encodeToString((it.private as Ed25519PrivateKeyParameters).encoded)
+}
 
-fun loadPublicKey(key: String) = Ed25519PublicKeyParameters(Base64.decode(key, Base64.DEFAULT))
+fun loadPrivateEd25519(key: String) = Ed25519PrivateKeyParameters(Base64.getDecoder().decode(key))
+
+fun loadPublicEd25519(key: String) = Ed25519PublicKeyParameters(Base64.getDecoder().decode(key))
 
 fun generateX25519KeyPair(): AsymmetricCipherKeyPair = X25519KeyPairGenerator().let {
     it.init(KeyGenerationParameters(SecureRandom(), 256))
     it.generateKeyPair()
+}
+
+/**
+ * 插入从position 0到当前位置的签名数据，并移动position
+ */
+fun ByteBuffer.putSign(key: Ed25519PrivateKeyParameters): ByteBuffer{
+    val sign = ByteArray(Ed25519.SIGNATURE_SIZE)
+    key.sign(Ed25519.Algorithm.Ed25519, null, array(), 0, position(), sign, 0)
+    put(sign)
+    return this
 }
 
 /**
