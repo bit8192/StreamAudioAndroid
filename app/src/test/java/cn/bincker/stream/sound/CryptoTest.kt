@@ -63,9 +63,9 @@ class CryptoTest {
         val key = keyPair.private as Ed25519PrivateKeyParameters
         val pubkey = keyPair.public as Ed25519PublicKeyParameters
         val data = "test".toByteArray()
-        val result = ByteArray(64)
+        val result = ByteArray(Ed25519.SIGNATURE_SIZE)
         key.sign(Ed25519.Algorithm.Ed25519, null, data, 0, data.size, result, 0)
-        println("sign: ${result.toHexString()}")
+        println("sign: ${result.toHexString()}\tlen=${result.size}\tlong len:${Long.SIZE_BYTES}")
         Assert.assertTrue(
             pubkey.verify(
                 Ed25519.Algorithm.Ed25519,

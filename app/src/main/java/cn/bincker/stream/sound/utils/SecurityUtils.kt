@@ -6,11 +6,15 @@ import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.generators.X25519KeyPairGenerator
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import org.bouncycastle.math.ec.rfc8032.Ed25519
 import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
+import javax.crypto.Cipher
 import javax.crypto.Mac
+import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 fun generateEd25519KeyPair(): AsymmetricCipherKeyPair {
@@ -25,7 +29,11 @@ fun generateEd25519AsBase64(): String = generateX25519KeyPair().let {
 
 fun loadPrivateEd25519(key: String) = Ed25519PrivateKeyParameters(Base64.getDecoder().decode(key))
 
-fun loadPublicEd25519(key: String) = Ed25519PublicKeyParameters(Base64.getDecoder().decode(key))
+fun loadPublicEd25519(key: String) = loadPublicEd25519(Base64.getDecoder().decode(key))
+
+fun loadPublicEd25519(key: ByteArray) = Ed25519PublicKeyParameters(key)
+
+fun loadPublicX25519(key: ByteArray) = X25519PublicKeyParameters(key, 0)
 
 fun generateX25519KeyPair(): AsymmetricCipherKeyPair = X25519KeyPairGenerator().let {
     it.init(KeyGenerationParameters(SecureRandom(), 256))
@@ -43,36 +51,51 @@ fun ByteBuffer.putSign(key: Ed25519PrivateKeyParameters): ByteBuffer{
 }
 
 /**
- * 使用 HMAC-SHA256 派生密钥 (Key Derivation Function)
- * 与 C++ 端的 hmac_derive_key 实现保持一致
- *
- * @param sharedSecret X25519 ECDH 共享密钥
- * @param salt 盐值 (可为空)
- * @param info 上下文信息 (默认为 "steam-audi0")
- * @return 派生的 32 字节密钥
+ * hmac-sha256
  */
-fun hmacDeriveKey(
-    sharedSecret: ByteArray,
-    salt: ByteArray = ByteArray(0),
-    info: ByteArray = byteArrayOf('s'.code.toByte(), 't'.code.toByte(), 'e'.code.toByte(),
-                                    'a'.code.toByte(), 'm'.code.toByte(), '-'.code.toByte(),
-                                    'a'.code.toByte(), 'u'.code.toByte(), 'd'.code.toByte(),
-                                    'i'.code.toByte(), '0'.code.toByte())
+fun hMacSha256(
+    key: ByteArray,
+    content: ByteArray
 ): ByteArray {
     val mac = Mac.getInstance("HmacSHA256")
-    val keySpec = SecretKeySpec(sharedSecret, "HmacSHA256")
+    val keySpec = SecretKeySpec(key, "HmacSHA256")
     mac.init(keySpec)
 
     // 添加盐值（如果有）
-    if (salt.isNotEmpty()) {
-        mac.update(salt)
-    }
-
-    // 添加上下文信息
-    if (info.isNotEmpty()) {
-        mac.update(info)
+    if (content.isNotEmpty()) {
+        mac.update(content)
     }
 
     // 返回派生的密钥
     return mac.doFinal()
+}
+
+/**
+ * 计算 SHA-256 哈希值
+ */
+fun ByteArray.sha256(): ByteArray {
+    val digest = MessageDigest.getInstance("SHA-256")
+    return digest.digest(this)
+}
+
+/**
+ * 使用 AES-256-GCM 加密数据
+ */
+fun aes256gcmEncrypt(plainText: ByteArray, key: ByteArray, iv: ByteArray): ByteArray {
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    val keySpec = SecretKeySpec(key, "AES")
+    val gcmSpec = GCMParameterSpec(128, iv)
+    cipher.init(Cipher.ENCRYPT_MODE, keySpec, gcmSpec)
+    return cipher.doFinal(plainText)
+}
+
+/**
+ * 使用 AES-256-GCM 解密数据
+ */
+fun aes256gcmDecrypt(cipherText: ByteArray, key: ByteArray, iv: ByteArray): ByteArray {
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    val keySpec = SecretKeySpec(key, "AES")
+    val gcmSpec = GCMParameterSpec(128, iv)
+    cipher.init(Cipher.DECRYPT_MODE, keySpec, gcmSpec)
+    return cipher.doFinal(cipherText)
 }

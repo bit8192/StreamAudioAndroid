@@ -1,14 +1,14 @@
 package cn.bincker.stream.sound.entity
 
 import android.util.Log
-import cn.bincker.stream.sound.AudioService
 import cn.bincker.stream.sound.ProtocolMagicEnum
 import cn.bincker.stream.sound.ProtocolMagicEnum.ECDH
 import cn.bincker.stream.sound.ProtocolMagicEnum.ECDH_RESPONSE
 import cn.bincker.stream.sound.config.DeviceConfig
 import cn.bincker.stream.sound.repository.AppConfigRepository
-import cn.bincker.stream.sound.utils.hmacDeriveKey
+import cn.bincker.stream.sound.utils.hMacSha256
 import cn.bincker.stream.sound.utils.loadPublicEd25519
+import cn.bincker.stream.sound.utils.sha256
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -19,15 +19,15 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import org.bouncycastle.crypto.AsymmetricCipherKeyPair
-import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
+import org.bouncycastle.math.ec.rfc7748.X25519
 import java.net.InetSocketAddress
 import java.net.SocketAddress
 import java.nio.ByteBuffer
 import java.nio.channels.SocketChannel
+import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
 
 class Device(
@@ -43,7 +43,7 @@ class Device(
 
     val isConnected get() = connected
 
-    val publicKey: Ed25519PublicKeyParameters? = config.publicKey.let {
+    var publicKey: Ed25519PublicKeyParameters? = config.publicKey.let {
         if (it.isBlank()) null else loadPublicEd25519(it)
     }
 
@@ -54,7 +54,7 @@ class Device(
 
     val messageQueueNum = AtomicInteger(0)
     val messageIdNum = AtomicInteger(0)
-    var messageFlow: SharedFlow<Message<*>?>? = null
+    var messageFlow: SharedFlow<Message<out MessageBody>?>? = null
 
     val socketAddress get(): SocketAddress {
         val parts = config.address.split(":")
@@ -87,16 +87,22 @@ class Device(
     @OptIn(ExperimentalStdlibApi::class)
     suspend fun listening() = withChannel {
         val buffer = ByteBuffer.allocate(2048)
-        val msf = MutableSharedFlow<Message<*>?>(0, 10)
+        val msf = MutableSharedFlow<Message<out MessageBody>?>(0, 10)
         messageFlow = msf
         try {
             while (connected && read(buffer) != -1) {
                 buffer.flip()
                 val msg = buffer.getMessage()
-                if (msg != null){
-                    msf.emit(msg)
-                }else{
-                    Log.d(TAG, "listening: invalid msg data=${buffer.array().copyOfRange(buffer.position(), buffer.position() + buffer.limit()).toHexString()}")
+                if(msg == null){
+                    Log.d(TAG, "listening: incomplete msg data=${buffer.array().copyOfRange(buffer.position(), buffer.position() + buffer.limit()).toHexString()}")
+                    buffer.compact()
+                    continue
+                }
+                when(msg.magic){
+                    ProtocolMagicEnum.PAIR -> {
+                        //TODO 作为服务端
+                    }
+                    else -> msf.emit(msg)
                 }
                 buffer.compact()
             }
@@ -130,14 +136,54 @@ class Device(
         }
     }
 
-    suspend fun pair() {
+    private fun resolveMessage(msg: Message<out MessageBody>): Message<out MessageBody>? {
+        return when(msg.magic){
+            ProtocolMagicEnum.ERROR -> {
+                val errorMsg =
+                    if (msg.body is StringMessageBody) msg.body.message else "unknown error"
+                throw Exception("device [${config.name}] response error: $errorMsg")
+            }
+            ProtocolMagicEnum.ENCRYPTED -> {
+                return if (msg.body is ByteArrayMessageBody) {
+                    msg.body.decryptAes256gcm(sessionKey)
+                } else {
+                    throw Exception("device [${config.name}] invalid encrypted message body")
+                }
+            }
+            else -> msg
+        }
+    }
+
+    private suspend inline fun <reified B: MessageBody> waitResponse(id: Int, magic: ProtocolMagicEnum, timeout: Long = msgWaitTimeout): Message<B> = withTimeout(timeout) {
+        messageFlow?.filter { it?.id == id }?.first()?.let { resolveMessage(it) }?.let {
+            if (it.magic != magic || it.body !is B) throw Exception("device [${config.name}] unexpected response magic: ${it.magic} != $magic")
+            @Suppress("UNCHECKED_CAST")
+            it as Message<B>
+        }
+    } ?: throw Exception("device [${config.name}] ecdh no response received")
+
+    suspend fun pair(pairCode: String) {
         withChannel {
             val msgId = messageIdNum.getAndIncrement()
-            writeMessage(messageQueueNum, Message.build(
-                ProtocolMagicEnum.PAIR,
-                msgId,
-                ByteArrayMessageBody(appConfigRepository.publicKey.encoded)
-            ), appConfigRepository.privateKey)
+            val queueNum = messageQueueNum.getAndIncrement()
+            writeMessage(
+                queueNum,
+                Message.build(
+                    ProtocolMagicEnum.PAIR,
+                    msgId,
+                    Ed25519PublicKeyMessageBody(appConfigRepository.publicKey)
+                )
+                    .toAes256gcmEncryptedMessage(
+                        queueNum,
+                        appConfigRepository.privateKey,
+                        pairCode.toByteArray().sha256()
+                    ),
+                appConfigRepository.privateKey
+            )
+            val response = waitResponse<Ed25519PublicKeyMessageBody>(msgId, ProtocolMagicEnum.PAIR_RESPONSE)
+            publicKey = response.body.publicKey
+            config.publicKey = Base64.getEncoder().encodeToString(response.body.publicKey.encoded)
+            appConfigRepository.addDeviceConfig(config)
         }
     }
 
@@ -145,24 +191,27 @@ class Device(
     suspend fun ecdh() {
         withChannel {
             val msgId = messageIdNum.getAndIncrement()
-            writeMessage(messageQueueNum, Message.build(
-                ECDH,
-                msgId,
-                ByteArrayMessageBody(appConfigRepository.publicKey.encoded)
-            ), appConfigRepository.privateKey)
-            val response = withTimeout(msgWaitTimeout) {
-                messageFlow?.filter { it?.magic == ECDH_RESPONSE && it.id == msgId }?.first()
-            } ?: throw Exception("device [${config.name}] ecdh no response received")
-            if(response.body is ByteArrayMessageBody) {
-                val ecdhKey = X25519PublicKeyParameters(response.body.data, 0)
-
+            val queueNum = messageQueueNum.getAndIncrement()
+            writeMessage(
+                queueNum,
+                Message.build(
+                    ECDH,
+                    msgId,
+                    X25519PublicKeyMessageBody(appConfigRepository.ecdhKeyPair.public as X25519PublicKeyParameters)
+                )
+                    .toAes256gcmEncryptedMessage(
+                        queueNum,
+                        appConfigRepository.privateKey,
+                        appConfigRepository.publicKey.encoded.sha256()
+                    ),
+                appConfigRepository.privateKey
+            )
+            waitResponse<X25519PublicKeyMessageBody>(msgId, ECDH_RESPONSE).let { response->
                 // 生成原始 X25519 共享密钥
-                val rawSharedSecret = ByteArray(32)
-                (appConfigRepository.ecdhKeyPair.private as X25519PrivateKeyParameters).generateSecret(ecdhKey, rawSharedSecret, 0)
-
-                // 使用 HMAC-SHA256 派生最终会话密钥 (与 C++ 端保持一致)
-                val derivedKey = hmacDeriveKey(rawSharedSecret, salt = ByteArray(0))
-                derivedKey.copyInto(sessionKey, 0, 0, 32)
+                val rawSharedSecret = ByteArray(X25519.POINT_SIZE)
+                (appConfigRepository.ecdhKeyPair.private as X25519PrivateKeyParameters)
+                    .generateSecret(response.body.publicKey, rawSharedSecret, 0)
+                sessionKey = rawSharedSecret.sha256()
 
                 _ecdhCompleted = true
                 Log.d(TAG, "ecdh: device [${config.name}] ecdh success, sessionKey=${sessionKey.toHexString()}")

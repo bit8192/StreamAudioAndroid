@@ -44,32 +44,13 @@ object Crc16 {
 }
 
 /**
- * 计算 ByteBuffer 的 CRC16 校验值（从当前 position 到 limit）
+ * 计算 ByteBuffer 的 CRC16 校验值（从 0 到 当前 position）
  *
  * 注意：此方法会保持 buffer 的 position 不变
  *
  * @return CRC16 校验值
  */
-fun ByteBuffer.crc16(): Int {
-    val originalPosition = position()
-    val length = remaining()
-
-    val crc = if (hasArray()) {
-        // array-backed buffer，使用数组方式更高效
-        Crc16.calculate(array(), arrayOffset() + originalPosition, length)
-    } else {
-        // 直接从 buffer 读取
-        var result = 0xFFFF
-        for (i in 0 until length) {
-            val b = get(originalPosition + i).toInt() and 0xFF
-            val index = ((result shr 8) xor b) and 0xFF
-            result = ((result shl 8) xor crcTable[index]) and 0xFFFF
-        }
-        result
-    }
-
-    return crc
-}
+fun ByteBuffer.crc16() = Crc16.calculate(array(), arrayOffset(), position())
 
 /**
  * 验证 ByteBuffer 的 CRC16 校验值是否匹配
@@ -77,20 +58,8 @@ fun ByteBuffer.crc16(): Int {
  * @param expectedCrc16 期望的 CRC16 值
  * @return 校验是否通过
  */
-fun ByteBuffer.verifyCrc16(expectedCrc16: Int): Boolean {
+fun ByteBuffer.verifyCrc16(expectedCrc16: Int = peekCrc16()): Boolean {
     return crc16() == expectedCrc16
-}
-
-/**
- * 将 CRC16 值转换为 2 字节的 ByteArray（大端序）
- *
- * @return 包含 CRC16 值的 2 字节数组
- */
-fun Int.toCrc16Bytes(): ByteArray {
-    return byteArrayOf(
-        (this shr 8).toByte(),
-        this.toByte()
-    )
 }
 
 /**
@@ -104,14 +73,13 @@ fun ByteBuffer.getCrc16(): Int {
 }
 
 /**
- * 从 ByteBuffer 指定位置读取 CRC16 值（大端序，2 字节），不改变 position
+ * 从 ByteBuffer 当前位置读取 CRC16 值（大端序，2 字节），不移动 position
  *
- * @param offset 读取位置的偏移量
  * @return CRC16 值
  */
-fun ByteBuffer.getCrc16(offset: Int): Int {
-    return ((get(offset).toInt() and 0xFF) shl 8) or
-           (get(offset + 1).toInt() and 0xFF)
+fun ByteBuffer.peekCrc16(): Int {
+    return ((get(position()).toInt() and 0xFF) shl 8) or
+            (get(position() + 1).toInt() and 0xFF)
 }
 
 /**
@@ -119,34 +87,8 @@ fun ByteBuffer.getCrc16(offset: Int): Int {
  *
  * @param crc16 要写入的 CRC16 值
  */
-fun ByteBuffer.putCrc16(crc16: Int): ByteBuffer {
+fun ByteBuffer.putCrc16(crc16: Int = crc16()): ByteBuffer {
     put((crc16 shr 8).toByte())
     put(crc16.toByte())
-    return this
-}
-
-/**
- * 向 ByteBuffer 指定位置写入 CRC16 值（大端序，2 字节），不改变 position
- *
- * @param offset 写入位置的偏移量
- * @param crc16 要写入的 CRC16 值
- */
-fun ByteBuffer.putCrc16(offset: Int, crc16: Int): ByteBuffer {
-    put(offset, (crc16 shr 8).toByte())
-    put(offset + 1, crc16.toByte())
-    return this
-}
-
-/**
- * 计算0位置到当前位置的 CRC16值 到当前位置，并移动 position
- */
-fun ByteBuffer.putCrc16(): ByteBuffer {
-    val pos = position()
-    val limit = limit()
-    flip()
-    val value = crc16()
-    position(pos)
-    limit(limit)
-    putCrc16(value)
     return this
 }
