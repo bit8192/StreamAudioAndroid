@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "StreamSoundAndroid"
+rootProject.name = "StreamAudioAndroid"
 include(":app")

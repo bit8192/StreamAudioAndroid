@@ -92,7 +92,7 @@ class Device(
         try {
             while (connected && read(buffer) != -1) {
                 buffer.flip()
-                val msg = buffer.getMessage()
+                val msg = buffer.getMessage(publicKey)
                 if(msg == null){
                     Log.d(TAG, "listening: incomplete msg data=${buffer.array().copyOfRange(buffer.position(), buffer.position() + buffer.limit()).toHexString()}")
                     buffer.compact()
@@ -145,7 +145,7 @@ class Device(
             }
             ProtocolMagicEnum.ENCRYPTED -> {
                 return if (msg.body is ByteArrayMessageBody) {
-                    msg.body.decryptAes256gcm(sessionKey)
+                    msg.body.decryptAes256gcm(sessionKey, publicKey)
                 } else {
                     throw Exception("device [${config.name}] invalid encrypted message body")
                 }

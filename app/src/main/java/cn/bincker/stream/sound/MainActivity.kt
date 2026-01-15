@@ -48,7 +48,7 @@ import androidx.core.app.ActivityCompat.requestPermissions
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.bincker.stream.sound.config.DeviceConfig
 import cn.bincker.stream.sound.entity.Device
-import cn.bincker.stream.sound.ui.theme.StreamSoundTheme
+import cn.bincker.stream.sound.ui.theme.StreamAudioTheme
 import cn.bincker.stream.sound.utils.generateEd25519AsBase64
 import cn.bincker.stream.sound.utils.loadPrivateEd25519
 import cn.bincker.stream.sound.vm.DeviceListViewModel
@@ -68,7 +68,7 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         setContent {
-            StreamSoundTheme {
+            StreamAudioTheme {
                 Page(vm, barcodeLauncher)
             }
         }

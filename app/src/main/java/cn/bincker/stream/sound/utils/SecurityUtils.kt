@@ -40,13 +40,41 @@ fun generateX25519KeyPair(): AsymmetricCipherKeyPair = X25519KeyPairGenerator().
     it.generateKeyPair()
 }
 
+fun ByteBuffer.verifySign(key: Ed25519PublicKeyParameters) = key.verify(
+    Ed25519.Algorithm.Ed25519,
+    null,
+    array(),
+    arrayOffset(),
+    position(),
+    array(),
+    arrayOffset() + position()
+)
+
+/**
+ * 校验sign，并移动position
+ */
+@OptIn(ExperimentalStdlibApi::class)
+fun ByteBuffer.verifyAndGetSign(key: Ed25519PublicKeyParameters): ByteArray{
+    if(!verifySign(key)){
+        throw Exception("verify sign fail: hex=${this.array().toHexString()}\tpos=${position()}}")
+    }
+    return array().copyOfRange(arrayOffset() + position(), arrayOffset() + position() + Ed25519.SIGNATURE_SIZE)
+}
+
+/**
+ * 计算从position 0到当前位置的签名数据，并不移动position
+ */
+fun ByteBuffer.computeSign(key: Ed25519PrivateKeyParameters): ByteArray{
+    val sign = ByteArray(Ed25519.SIGNATURE_SIZE)
+    key.sign(Ed25519.Algorithm.Ed25519, null, array(), 0, position(), sign, 0)
+    return sign
+}
+
 /**
  * 插入从position 0到当前位置的签名数据，并移动position
  */
 fun ByteBuffer.putSign(key: Ed25519PrivateKeyParameters): ByteBuffer{
-    val sign = ByteArray(Ed25519.SIGNATURE_SIZE)
-    key.sign(Ed25519.Algorithm.Ed25519, null, array(), 0, position(), sign, 0)
-    put(sign)
+    put(computeSign(key))
     return this
 }
 

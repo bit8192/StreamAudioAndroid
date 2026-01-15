@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-StreamSoundAndroid（StreamAudioAndroid）是一个通过网络使用 UDP 通信进行音频流传输的 Android 应用。该应用通过二维码实现设备配对，使用 Ed25519 进行身份认证，使用 X25519 进行密钥交换加密。
+StreamAudioAndroid（StreamAudioAndroid）是一个通过网络使用 UDP 通信进行音频流传输的 Android 应用。该应用通过二维码实现设备配对，使用 Ed25519 进行身份认证，使用 X25519 进行密钥交换加密。
 
 ## 构建命令
 
@@ -78,7 +78,7 @@ StreamSoundAndroid（StreamAudioAndroid）是一个通过网络使用 UDP 通信
 1. 应用启动 → Application 初始化加密并加载配置
 2. MainActivity 启动 → 绑定到 AudioService → 服务以前台模式启动
 3. UI 显示来自配置的设备列表（DeviceListViewModel）
-4. 用户扫描二维码 → 解析 "streamsound://host:port" URI → AudioService.pairDevice()
+4. 用户扫描二维码 → 解析 "streamaudio://host:port" URI → AudioService.pairDevice()
 5. AudioService 处理 UDP 通信（设备发现、配对、音频流传输）
 
 ### 网络协议

@@ -12,7 +12,9 @@ import cn.bincker.stream.sound.utils.loadPublicX25519
 import cn.bincker.stream.sound.utils.putCrc16
 import cn.bincker.stream.sound.utils.putSign
 import cn.bincker.stream.sound.utils.sha256
+import cn.bincker.stream.sound.utils.verifyAndGetSign
 import cn.bincker.stream.sound.utils.verifyCrc16
+import cn.bincker.stream.sound.utils.verifySign
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
@@ -50,7 +52,7 @@ data class ByteArrayMessageBody(
 
     override fun length() = data.size
 
-    fun decryptAes256gcm(key: ByteArray): Message<out MessageBody>? = ByteBuffer.wrap(fromAes256gcmEncryptedData(data, key).data).getMessage()
+    fun decryptAes256gcm(key: ByteArray, verifySignKey: Ed25519PublicKeyParameters? = null): Message<out MessageBody>? = ByteBuffer.wrap(fromAes256gcmEncryptedData(data, key).data).getMessage(verifySignKey)
 
     companion object {
         const val IV_LENGTH = 16
@@ -170,7 +172,7 @@ data class Message<T: MessageBody>(
         crc = this.crc
     )
 
-    fun toByteBuffer(queueNum: Int, key: Ed25519PrivateKeyParameters): ByteBuffer = ByteBuffer.allocate(
+    private fun dataSectionToByteBuffer(queueNum: Int): ByteBuffer = ByteBuffer.allocate(
         minLength + packLength).apply {
         put(magic.magic)
         putInt(version)
@@ -179,6 +181,9 @@ data class Message<T: MessageBody>(
         val bodyBytes = body.toByteArray()
         putInt(bodyBytes.size)
         put(bodyBytes)
+    }
+
+    fun toByteBuffer(queueNum: Int, key: Ed25519PrivateKeyParameters): ByteBuffer = dataSectionToByteBuffer(queueNum).apply {
         putSign(key)
         putCrc16()
     }
@@ -193,6 +198,8 @@ data class Message<T: MessageBody>(
         sign = ByteArray(0),
         crc = 0
     )
+
+    fun verifySign(verifySignKey: Ed25519PublicKeyParameters): Boolean = dataSectionToByteBuffer(queueNum).verifySign(verifySignKey)
 }
 
 @OptIn(ExperimentalStdlibApi::class)
@@ -206,7 +213,7 @@ fun SocketChannel.writeMessage(queueNum: Int, message: Message<*>, key: Ed25519P
 }
 
 @OptIn(ExperimentalStdlibApi::class)
-fun ByteBuffer.getMessage(): Message<out MessageBody>? {
+fun ByteBuffer.getMessage(verifySignKey: Ed25519PublicKeyParameters? = null): Message<out MessageBody>? {
     if (remaining() < Message.minLength) return null
     mark()
     val magic = ProtocolMagicEnum.match(this) ?: run {
@@ -223,8 +230,9 @@ fun ByteBuffer.getMessage(): Message<out MessageBody>? {
     }
     val bodyBytes = ByteArray(length)
     get(bodyBytes)
-    val sign = ByteArray(Ed25519.SIGNATURE_SIZE)
-    get(sign)
+    val sign = verifySignKey?.let { verifyAndGetSign(it) } ?: ByteArray(Ed25519.SIGNATURE_SIZE).also {
+        get(it)
+    }
     val validCrc = verifyCrc16()
     val crc = getCrc16()
     if (!validCrc){
@@ -245,15 +253,9 @@ fun ByteBuffer.getMessage(): Message<out MessageBody>? {
 
 fun resolveMessage(msg: Message<ByteArrayMessageBody>): Message<out MessageBody> = when(msg.magic) {
     ProtocolMagicEnum.PAIR,
-    ProtocolMagicEnum.PAIR_RESPONSE, ->
-        msg.transferBody(
-            Ed25519PublicKeyMessageBody(loadPublicEd25519(msg.body.data))
-        )
+    ProtocolMagicEnum.PAIR_RESPONSE,
     ProtocolMagicEnum.ECDH,
-    ProtocolMagicEnum.ECDH_RESPONSE, ->
-        msg.transferBody(
-            X25519PublicKeyMessageBody(loadPublicX25519(msg.body.data))
-        )
+    ProtocolMagicEnum.ECDH_RESPONSE,
     ProtocolMagicEnum.AUTHENTICATION,
     ProtocolMagicEnum.AUTHENTICATION_RESPONSE,
     ProtocolMagicEnum.PLAY,
