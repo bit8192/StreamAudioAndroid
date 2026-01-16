@@ -8,6 +8,7 @@ import cn.bincker.stream.sound.config.DeviceConfig
 import cn.bincker.stream.sound.repository.AppConfigRepository
 import cn.bincker.stream.sound.utils.hMacSha256
 import cn.bincker.stream.sound.utils.loadPublicEd25519
+import cn.bincker.stream.sound.utils.loadPublicX25519
 import cn.bincker.stream.sound.utils.sha256
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -192,6 +193,11 @@ class Device(
         withChannel {
             val msgId = messageIdNum.getAndIncrement()
             val queueNum = messageQueueNum.getAndIncrement()
+
+            // Use SERVER's Ed25519 public key SHA256 for encryption
+            val encryptKey = publicKey?.encoded?.sha256()
+                ?: throw Exception("No server public key for ECDH")
+
             writeMessage(
                 queueNum,
                 Message.build(
@@ -202,19 +208,126 @@ class Device(
                     .toAes256gcmEncryptedMessage(
                         queueNum,
                         appConfigRepository.privateKey,
-                        appConfigRepository.publicKey.encoded.sha256()
+                        encryptKey
                     ),
                 appConfigRepository.privateKey
             )
-            waitResponse<X25519PublicKeyMessageBody>(msgId, ECDH_RESPONSE).let { response->
+
+            waitResponse<ByteArrayMessageBody>(msgId, ECDH_RESPONSE).let { response->
+                // Decrypt with OWN Ed25519 public key SHA256
+                val decryptKey = appConfigRepository.publicKey.encoded.sha256()
+                val decryptedMsg = response.body.decryptAes256gcm(decryptKey, publicKey)
+                    ?: throw Exception("Failed to decrypt ECDH_RESPONSE")
+
+                val serverX25519Body = decryptedMsg.body as? ByteArrayMessageBody
+                    ?: throw Exception("Invalid ECDH_RESPONSE body")
+
+                val serverX25519PublicKey = loadPublicX25519(serverX25519Body.data)
+
                 // 生成原始 X25519 共享密钥
                 val rawSharedSecret = ByteArray(X25519.POINT_SIZE)
                 (appConfigRepository.ecdhKeyPair.private as X25519PrivateKeyParameters)
-                    .generateSecret(response.body.publicKey, rawSharedSecret, 0)
+                    .generateSecret(serverX25519PublicKey, rawSharedSecret, 0)
                 sessionKey = rawSharedSecret.sha256()
 
                 _ecdhCompleted = true
                 Log.d(TAG, "ecdh: device [${config.name}] ecdh success, sessionKey=${sessionKey.toHexString()}")
+            }
+        }
+    }
+
+    private fun deriveUdpAudioKey(tcpSessionKey: ByteArray): ByteArray {
+        val salt = "udp-audio".toByteArray()
+        val info = "stream-audio-v1".toByteArray()
+        return hMacSha256(tcpSessionKey, salt + info)
+    }
+
+    @OptIn(ExperimentalStdlibApi::class)
+    suspend fun play(udpPort: Int = 8888) {
+        withChannel {
+            if (!ecdhCompleted) {
+                throw Exception("ECDH not completed, cannot play")
+            }
+
+            val msgId = messageIdNum.getAndIncrement()
+            val queueNum = messageQueueNum.getAndIncrement()
+
+            // Derive UDP audio key
+            val udpAudioKey = deriveUdpAudioKey(sessionKey)
+
+            // Build PLAY request with client UDP port
+            val bodyBytes = ByteBuffer.allocate(2).apply {
+                putShort(udpPort.toShort())
+            }.array()
+
+            writeMessage(
+                queueNum,
+                Message.build(
+                    ProtocolMagicEnum.PLAY,
+                    msgId,
+                    ByteArrayMessageBody(bodyBytes)
+                ).toAes256gcmEncryptedMessage(
+                    queueNum,
+                    appConfigRepository.privateKey,
+                    sessionKey
+                ),
+                appConfigRepository.privateKey
+            )
+
+            // Wait for PLAY_RESPONSE
+            waitResponse<ByteArrayMessageBody>(msgId, ProtocolMagicEnum.PLAY_RESPONSE).let { response ->
+                val decrypted = response.body.decryptAes256gcm(sessionKey, publicKey)
+                    ?: throw Exception("Failed to decrypt PLAY_RESPONSE")
+
+                val body = (decrypted.body as ByteArrayMessageBody).data
+                val buffer = ByteBuffer.wrap(body)
+
+                val serverUdpPort = buffer.getShort().toInt() and 0xFFFF
+                val sampleRate = buffer.getInt()
+                val bits = buffer.getShort().toInt() and 0xFFFF
+                val channels = buffer.getShort().toInt() and 0xFFFF
+                val format = buffer.getShort().toInt() and 0xFFFF
+
+                Log.i(TAG, "play: PLAY_RESPONSE received - port=$serverUdpPort, sr=$sampleRate, bits=$bits, ch=$channels, fmt=$format")
+                Log.d(TAG, "play: device [${config.name}] play started, udpKey=${udpAudioKey.toHexString()}")
+
+                // TODO: Start UDP receiver with udpAudioKey
+            }
+        }
+    }
+
+    suspend fun stop() {
+        withChannel {
+            val msgId = messageIdNum.getAndIncrement()
+            val queueNum = messageQueueNum.getAndIncrement()
+
+            // Send STOP request (empty body)
+            writeMessage(
+                queueNum,
+                Message.build(
+                    ProtocolMagicEnum.STOP,
+                    msgId,
+                    ByteArrayMessageBody(ByteArray(0))
+                ).toAes256gcmEncryptedMessage(
+                    queueNum,
+                    appConfigRepository.privateKey,
+                    sessionKey
+                ),
+                appConfigRepository.privateKey
+            )
+
+            // Wait for STOP_RESPONSE
+            waitResponse<ByteArrayMessageBody>(msgId, ProtocolMagicEnum.STOP_RESPONSE).let { response ->
+                val decrypted = response.body.decryptAes256gcm(sessionKey, publicKey)
+                    ?: throw Exception("Failed to decrypt STOP_RESPONSE")
+
+                val body = (decrypted.body as ByteArrayMessageBody).data
+                val status = if (body.isNotEmpty()) body[0].toInt() else 0
+
+                Log.i(TAG, "stop: STOP_RESPONSE received - status=$status")
+                Log.d(TAG, "stop: device [${config.name}] stopped")
+
+                // TODO: Stop UDP receiver
             }
         }
     }
