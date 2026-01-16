@@ -30,6 +30,7 @@ import java.nio.ByteBuffer
 import java.nio.channels.SocketChannel
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
+import cn.bincker.stream.sound.utils.toHexString
 
 class Device(
     val appConfigRepository: AppConfigRepository,
@@ -49,7 +50,7 @@ class Device(
     }
 
     private var _ecdhCompleted = false
-    val ecdhCompleted get() = _ecdhCompleted != null
+    val ecdhCompleted get() = _ecdhCompleted
 
     var sessionKey: ByteArray = ByteArray(32) { 0 }
 
@@ -88,7 +89,6 @@ class Device(
         }
     }
 
-    @OptIn(ExperimentalStdlibApi::class)
     suspend fun listening() = withChannel {
         val buffer = ByteBuffer.allocate(2048)
         val msf = MutableSharedFlow<Message<out MessageBody>?>(0, 10)
@@ -158,7 +158,7 @@ class Device(
             }
             ProtocolMagicEnum.ENCRYPTED -> {
                 return if (msg.body is ByteArrayMessageBody) {
-                    msg.body.decryptAes256gcm(sessionKey, publicKey)
+                    msg.body.decryptAes256gcmToMsg(sessionKey, publicKey)
                 } else {
                     throw Exception("device [${config.name}] invalid encrypted message body")
                 }
@@ -169,7 +169,8 @@ class Device(
 
     private suspend inline fun <reified B: MessageBody> waitResponse(id: Int, magic: ProtocolMagicEnum, timeout: Long = msgWaitTimeout): Message<B> = withTimeout(timeout) {
         messageFlow?.filter { it?.id == id }?.first()?.let { resolveMessage(it) }?.let {
-            if (it.magic != magic || it.body !is B) throw Exception("device [${config.name}] unexpected response magic: ${it.magic} != $magic")
+            if (it.magic != magic) throw Exception("device [${config.name}] unexpected response magic: ${it.magic} != $magic")
+            if (it.body !is B) throw Exception("device [${config.name}] unexpected response body type: ${it.body::class.java} != ${B::class.java}")
             @Suppress("UNCHECKED_CAST")
             it as Message<B>
         }
@@ -179,29 +180,27 @@ class Device(
         withChannel {
             val msgId = messageIdNum.getAndIncrement()
             val queueNum = messageQueueNum.getAndIncrement()
-            //TODO java.nio.BufferOverflowException
+            val key = Base64.getDecoder().decode(pairCode).sha256()
+            Log.d(TAG, "pair: key=${key.toHexString()}")
             writeMessage(
                 queueNum,
                 Message.build(
                     ProtocolMagicEnum.PAIR,
                     msgId,
-                    Ed25519PublicKeyMessageBody(appConfigRepository.publicKey)
-                )
-                    .toAes256gcmEncryptedMessage(
-                        queueNum,
-                        appConfigRepository.privateKey,
-                        pairCode.toByteArray().sha256()
-                    ),
+                    ByteArrayMessageBody.buildAes256gcmEncryptedBody(appConfigRepository.publicKey.encoded, key)
+                ),
                 appConfigRepository.privateKey
             )
-            val response = waitResponse<Ed25519PublicKeyMessageBody>(msgId, ProtocolMagicEnum.PAIR_RESPONSE)
-            publicKey = response.body.publicKey
-            config.publicKey = Base64.getEncoder().encodeToString(response.body.publicKey.encoded)
+            val response = waitResponse<ByteArrayMessageBody>(msgId, ProtocolMagicEnum.PAIR_RESPONSE)
+            loadPublicEd25519(response.body.decryptAes256gcm(appConfigRepository.publicKey.encoded.sha256()).data).let {
+                publicKey = it
+                config.publicKey = Base64.getEncoder().encodeToString(it.encoded)
+            }
             appConfigRepository.addDeviceConfig(config)
+            appConfigRepository.addDevice(this@Device)
         }
     }
 
-    @OptIn(ExperimentalStdlibApi::class)
     suspend fun ecdh() {
         withChannel {
             val msgId = messageIdNum.getAndIncrement()
@@ -229,7 +228,7 @@ class Device(
             waitResponse<ByteArrayMessageBody>(msgId, ECDH_RESPONSE).let { response->
                 // Decrypt with OWN Ed25519 public key SHA256
                 val decryptKey = appConfigRepository.publicKey.encoded.sha256()
-                val decryptedMsg = response.body.decryptAes256gcm(decryptKey, publicKey)
+                val decryptedMsg = response.body.decryptAes256gcmToMsg(decryptKey, publicKey)
                     ?: throw Exception("Failed to decrypt ECDH_RESPONSE")
 
                 val serverX25519Body = decryptedMsg.body as? ByteArrayMessageBody
@@ -255,7 +254,6 @@ class Device(
         return hMacSha256(tcpSessionKey, salt + info)
     }
 
-    @OptIn(ExperimentalStdlibApi::class)
     suspend fun play(udpPort: Int = 8888) {
         withChannel {
             if (!ecdhCompleted) {
@@ -289,7 +287,7 @@ class Device(
 
             // Wait for PLAY_RESPONSE
             waitResponse<ByteArrayMessageBody>(msgId, ProtocolMagicEnum.PLAY_RESPONSE).let { response ->
-                val decrypted = response.body.decryptAes256gcm(sessionKey, publicKey)
+                val decrypted = response.body.decryptAes256gcmToMsg(sessionKey, publicKey)
                     ?: throw Exception("Failed to decrypt PLAY_RESPONSE")
 
                 val body = (decrypted.body as ByteArrayMessageBody).data
@@ -354,7 +352,7 @@ class Device(
 
             // Wait for STOP_RESPONSE
             waitResponse<ByteArrayMessageBody>(msgId, ProtocolMagicEnum.STOP_RESPONSE).let { response ->
-                val decrypted = response.body.decryptAes256gcm(sessionKey, publicKey)
+                val decrypted = response.body.decryptAes256gcmToMsg(sessionKey, publicKey)
                     ?: throw Exception("Failed to decrypt STOP_RESPONSE")
 
                 val body = (decrypted.body as ByteArrayMessageBody).data

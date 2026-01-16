@@ -1,5 +1,7 @@
 package cn.bincker.stream.sound
 
+import cn.bincker.stream.sound.utils.aes256gcmDecrypt
+import cn.bincker.stream.sound.utils.aes256gcmEncrypt
 import cn.bincker.stream.sound.utils.generateEd25519AsBase64
 import cn.bincker.stream.sound.utils.generateEd25519KeyPair
 import cn.bincker.stream.sound.utils.generateX25519KeyPair
@@ -18,9 +20,10 @@ import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import cn.bincker.stream.sound.utils.hexToByteArray
+import cn.bincker.stream.sound.utils.toHexString
 
 class CryptoTest {
-    @OptIn(ExperimentalStdlibApi::class)
     @Test
     fun ecdh() {
         val keyPair1 = generateX25519KeyPair()
@@ -38,7 +41,6 @@ class CryptoTest {
         assert(secret1.contentEquals(secret2))
     }
 
-    @OptIn(ExperimentalStdlibApi::class)
     @Test
     fun qrCodeLenTest() {
         val key = loadPrivateEd25519(generateEd25519AsBase64())
@@ -56,7 +58,6 @@ class CryptoTest {
         println(Base64.getEncoder().encodeToString(mac.doFinal()))
     }
 
-    @OptIn(ExperimentalStdlibApi::class)
     @Test
     fun signTest() {
         val keyPair = generateEd25519KeyPair()
@@ -79,7 +80,6 @@ class CryptoTest {
         )
     }
 
-    @OptIn(ExperimentalStdlibApi::class)
     @Test
     fun aes256test() {
         val encryptAes = Cipher.getInstance("AES/GCM/NoPadding")
@@ -98,5 +98,23 @@ class CryptoTest {
         val decryptedData = decryptAes.doFinal(encryptedData)
         println("decryptedData: " + decryptedData.toHexString())
         println("decrypted value: " + String(decryptedData))
+    }
+
+    @Test
+    fun aes256gcmEncryptTest() {
+        val plaintext = "b3dcc08925962d8f9325ef58b14a3254254098f6eebe6d855968e29859bbf2ff".hexToByteArray()
+        val key = "2b7a9b43402b446bddfa954741ab784c5117478e95f15bdbcb8a728bfa857719".hexToByteArray()
+        val iv = "6996a9ace1a39d27525cc91479975f8c".hexToByteArray()
+        println("encryptedData: " + aes256gcmEncrypt(plaintext, key, iv).toHexString())
+    }
+
+    @Test
+    fun aes256gcmDecryptTest() {
+        val key = "2b7a9b43402b446bddfa954741ab784c5117478e95f15bdbcb8a728bfa857719".hexToByteArray()
+        val iv = "6996a9ace1a39d27525cc91479975f8c".hexToByteArray()
+        val ciphertext = "2c50178b18828f69572992cdb6f597a101f7920e5ab78801311b6d9ab596e0945d21ea9750d80cafdff851028c438df8".hexToByteArray()
+        aes256gcmDecrypt(ciphertext, key, iv).let {
+            println("decryptedData: " + it.toHexString())
+        }
     }
 }

@@ -22,6 +22,7 @@ data class PairDevice(
             val pairCode = matcher.group(3) ?: ""
             val address = InetSocketAddress(host, port)
             Log.d(TAG, "parseUri: pairCode=$pairCode\thost=$host\tport=$port\t")
+            if (!pairCode.matches(Regex("^[a-zA-Z0-9+/=]+$"))) throw Exception("invalid pair code: $pairCode")
             return PairDevice(pairCode, DeviceConfig(address.hostName, "$host:$port"))
         }
     }

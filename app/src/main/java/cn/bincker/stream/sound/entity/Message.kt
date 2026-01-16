@@ -7,11 +7,9 @@ import cn.bincker.stream.sound.utils.aes256gcmDecrypt
 import cn.bincker.stream.sound.utils.aes256gcmEncrypt
 import cn.bincker.stream.sound.utils.crc16
 import cn.bincker.stream.sound.utils.getCrc16
-import cn.bincker.stream.sound.utils.loadPublicEd25519
-import cn.bincker.stream.sound.utils.loadPublicX25519
 import cn.bincker.stream.sound.utils.putCrc16
 import cn.bincker.stream.sound.utils.putSign
-import cn.bincker.stream.sound.utils.sha256
+import cn.bincker.stream.sound.utils.toHexString
 import cn.bincker.stream.sound.utils.verifyAndGetSign
 import cn.bincker.stream.sound.utils.verifyCrc16
 import cn.bincker.stream.sound.utils.verifySign
@@ -22,7 +20,6 @@ import org.bouncycastle.math.ec.rfc8032.Ed25519
 import java.nio.ByteBuffer
 import java.nio.channels.SocketChannel
 import java.security.SecureRandom
-import java.util.concurrent.atomic.AtomicInteger
 
 const val TAG = "Message"
 
@@ -52,10 +49,12 @@ data class ByteArrayMessageBody(
 
     override fun length() = data.size
 
-    fun decryptAes256gcm(key: ByteArray, verifySignKey: Ed25519PublicKeyParameters? = null): Message<out MessageBody>? = ByteBuffer.wrap(fromAes256gcmEncryptedData(data, key).data).getMessage(verifySignKey)
+    fun decryptAes256gcm(key: ByteArray) = fromAes256gcmEncryptedData(data, key)
+
+    fun decryptAes256gcmToMsg(key: ByteArray, verifySignKey: Ed25519PublicKeyParameters? = null): Message<out MessageBody>? = ByteBuffer.wrap(decryptAes256gcm(key).data).getMessage(verifySignKey)
 
     companion object {
-        const val IV_LENGTH = 16
+        const val IV_LENGTH = 12
         //从Aes加密数据解密
         fun fromAes256gcmEncryptedData(encryptedData: ByteArray, key: ByteArray): ByteArrayMessageBody {
             if (encryptedData.size < IV_LENGTH) throw IllegalArgumentException("encryptedData length less than $IV_LENGTH")
@@ -111,7 +110,8 @@ data class Message<T: MessageBody>(
     val crc: Int
 ){
     companion object{
-        val minLength = ProtocolMagicEnum.minMagicLen + Int.SIZE_BYTES * 4 + Short.SIZE_BYTES + Ed25519.SIGNATURE_SIZE
+        val minLength = ProtocolMagicEnum.minMagicLen + Int.SIZE_BYTES * 4 + Short.SIZE_BYTES + Ed25519.SIGNATURE_SIZE + 2
+        val maxLength = ProtocolMagicEnum.maxMagicLen + Int.SIZE_BYTES * 4 + Short.SIZE_BYTES + Ed25519.SIGNATURE_SIZE + 2
 
         fun build(
             magic: ProtocolMagicEnum,
@@ -172,15 +172,16 @@ data class Message<T: MessageBody>(
         crc = this.crc
     )
 
-    private fun dataSectionToByteBuffer(queueNum: Int): ByteBuffer = ByteBuffer.allocate(
-        minLength + packLength).apply {
-        put(magic.magic)
-        putInt(version)
-        putInt(queueNum)
-        putInt(id)
-        val bodyBytes = body.toByteArray()
-        putInt(bodyBytes.size)
-        put(bodyBytes)
+    private fun dataSectionToByteBuffer(queueNum: Int): ByteBuffer = body.toByteArray().let { bodyBytes->
+        ByteBuffer.allocate(
+            maxLength + bodyBytes.size).apply {
+            put(magic.magic)
+            putInt(version)
+            putInt(queueNum)
+            putInt(id)
+            putInt(bodyBytes.size)
+            put(bodyBytes)
+        }
     }
 
     fun toByteBuffer(queueNum: Int, key: Ed25519PrivateKeyParameters): ByteBuffer = dataSectionToByteBuffer(queueNum).apply {
@@ -200,9 +201,10 @@ data class Message<T: MessageBody>(
     )
 
     fun verifySign(verifySignKey: Ed25519PublicKeyParameters): Boolean = dataSectionToByteBuffer(queueNum).verifySign(verifySignKey)
+
+    override fun toString() = "Message(magic=$magic, version=$version, queueNum=$queueNum, id=$id, packLength=$packLength, body=${body.toByteArray().toHexString()}, sign=${sign.toHexString()}, crc=$crc)"
 }
 
-@OptIn(ExperimentalStdlibApi::class)
 fun SocketChannel.writeMessage(queueNum: Int, message: Message<*>, key: Ed25519PrivateKeyParameters) {
     Log.d(TAG, "writeMessage: $message")
     message.toByteBuffer(queueNum, key).let {
@@ -212,7 +214,6 @@ fun SocketChannel.writeMessage(queueNum: Int, message: Message<*>, key: Ed25519P
     }
 }
 
-@OptIn(ExperimentalStdlibApi::class)
 fun ByteBuffer.getMessage(verifySignKey: Ed25519PublicKeyParameters? = null): Message<out MessageBody>? {
     if (remaining() < Message.minLength) return null
     mark()

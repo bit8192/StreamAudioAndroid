@@ -14,6 +14,7 @@ import cn.bincker.stream.sound.repository.AppConfigRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -88,11 +89,16 @@ class AudioService : Service() {
             Log.d(TAG, "pair: $uri")
             val pairDevice = PairDevice.parseUri(uri)
             val device = Device(appConfigRepository,pairDevice.device)
-            device.connect()
-            device.startListening(scope)
-            device.pair(pairDevice.pairCode)
-            appConfigRepository.addDeviceConfig(device.config)
-            appConfigRepository.addDevice(device)
+            var listenerJob: Job? = null
+            try {
+                device.connect()
+                listenerJob = device.startListening(scope)
+                device.pair(pairDevice.pairCode)
+            }catch (e: Exception){
+                listenerJob?.cancel()
+                device.disconnect()
+                throw e
+            }
         }
     }
 

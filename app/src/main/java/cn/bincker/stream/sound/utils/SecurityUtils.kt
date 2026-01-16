@@ -1,5 +1,6 @@
 package cn.bincker.stream.sound.utils
 
+import android.util.Log
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.KeyGenerationParameters
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
@@ -16,6 +17,8 @@ import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+
+const val TAG = "SecurityUtils"
 
 fun generateEd25519KeyPair(): AsymmetricCipherKeyPair {
     val keyPairGenerator = Ed25519KeyPairGenerator()
@@ -53,7 +56,6 @@ fun ByteBuffer.verifySign(key: Ed25519PublicKeyParameters) = key.verify(
 /**
  * 校验sign，并移动position
  */
-@OptIn(ExperimentalStdlibApi::class)
 fun ByteBuffer.verifyAndGetSign(key: Ed25519PublicKeyParameters): ByteArray{
     if(!verifySign(key)){
         throw Exception("verify sign fail: hex=${this.array().toHexString()}\tpos=${position()}}")
@@ -110,6 +112,7 @@ fun ByteArray.sha256(): ByteArray {
  * 使用 AES-256-GCM 加密数据
  */
 fun aes256gcmEncrypt(plainText: ByteArray, key: ByteArray, iv: ByteArray): ByteArray {
+//    Log.d(TAG, "aes256gcmEncrypt: plainText=${plainText.toHexString()}\tkey=${key.toHexString()}\tiv=${iv.toHexString()}")
     val cipher = Cipher.getInstance("AES/GCM/NoPadding")
     val keySpec = SecretKeySpec(key, "AES")
     val gcmSpec = GCMParameterSpec(128, iv)
