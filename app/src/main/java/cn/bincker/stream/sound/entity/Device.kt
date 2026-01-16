@@ -57,6 +57,9 @@ class Device(
     val messageIdNum = AtomicInteger(0)
     var messageFlow: SharedFlow<Message<out MessageBody>?>? = null
 
+    // UDP Audio Receiver
+    private var udpAudioReceiver: UdpAudioReceiver? = null
+
     val socketAddress get(): SocketAddress {
         val parts = config.address.split(":")
         val host = parts[0]
@@ -118,6 +121,15 @@ class Device(
     suspend fun disconnect(){
         withContext(Dispatchers.IO) {
             connected = false
+
+            // Stop UDP receiver if running
+            try {
+                udpAudioReceiver?.stop()
+                udpAudioReceiver = null
+            } catch (e: Exception) {
+                Log.e(TAG, "disconnect: Failed to stop UDP receiver", e)
+            }
+
             channel?.let {
                 if (it.isOpen) it.close()
                 channel = null
@@ -167,6 +179,7 @@ class Device(
         withChannel {
             val msgId = messageIdNum.getAndIncrement()
             val queueNum = messageQueueNum.getAndIncrement()
+            //TODO java.nio.BufferOverflowException
             writeMessage(
                 queueNum,
                 Message.build(
@@ -291,7 +304,30 @@ class Device(
                 Log.i(TAG, "play: PLAY_RESPONSE received - port=$serverUdpPort, sr=$sampleRate, bits=$bits, ch=$channels, fmt=$format")
                 Log.d(TAG, "play: device [${config.name}] play started, udpKey=${udpAudioKey.toHexString()}")
 
-                // TODO: Start UDP receiver with udpAudioKey
+                // Start UDP receiver with udpAudioKey
+                try {
+                    val serverAddress = channel!!.remoteAddress as InetSocketAddress
+                    udpAudioReceiver = UdpAudioReceiver(
+                        serverAddress = serverAddress.address,
+                        clientPort = udpPort,
+                        udpAudioKey = udpAudioKey,
+                        sampleRate = sampleRate,
+                        bits = bits,
+                        channels = channels,
+                        format = format
+                    )
+
+                    // Use the context from the current coroutine scope
+                    val receiverScope = CoroutineScope(Dispatchers.IO)
+                    udpAudioReceiver?.start(receiverScope)
+
+                    Log.i(TAG, "play: UDP audio receiver started on port $udpPort")
+
+                } catch (e: Exception) {
+                    Log.e(TAG, "play: Failed to start UDP receiver", e)
+                    udpAudioReceiver = null
+                    throw e
+                }
             }
         }
     }
@@ -327,7 +363,14 @@ class Device(
                 Log.i(TAG, "stop: STOP_RESPONSE received - status=$status")
                 Log.d(TAG, "stop: device [${config.name}] stopped")
 
-                // TODO: Stop UDP receiver
+                // Stop UDP receiver
+                try {
+                    udpAudioReceiver?.stop()
+                    udpAudioReceiver = null
+                    Log.i(TAG, "stop: UDP audio receiver stopped")
+                } catch (e: Exception) {
+                    Log.e(TAG, "stop: Failed to stop UDP receiver", e)
+                }
             }
         }
     }

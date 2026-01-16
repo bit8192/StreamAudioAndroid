@@ -23,7 +23,7 @@ fun generateEd25519KeyPair(): AsymmetricCipherKeyPair {
     return keyPairGenerator.generateKeyPair()
 }
 
-fun generateEd25519AsBase64(): String = generateX25519KeyPair().let {
+fun generateEd25519AsBase64(): String = generateEd25519KeyPair().let {
     Base64.getEncoder().encodeToString((it.private as Ed25519PrivateKeyParameters).encoded)
 }
 

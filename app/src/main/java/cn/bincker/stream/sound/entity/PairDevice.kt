@@ -12,14 +12,14 @@ data class PairDevice(
 ){
     companion object{
         const val TAG = "PairDevice"
-        val URI_REGEX: Pattern = Pattern.compile("^${Constant.APPLICATION_URI_PREFIX}(\\w+)@([^:]+):(\\d+)$")
+        val URI_REGEX: Pattern = Pattern.compile("^${Constant.APPLICATION_URI_PREFIX}([^:]+):(\\d+)\\?([a-zA-Z0-9+/=]+)$")
         const val DEFAULT_PORT = 8888
         fun parseUri(uri: String): PairDevice{
             val matcher = URI_REGEX.matcher(uri.trim())
             if (!matcher.find()) throw Exception("invalid uri: $uri")
-            val pairCode = matcher.group(1) ?: ""
-            val host = matcher.group(2)
-            val port = matcher.group(3)?.toInt() ?: DEFAULT_PORT
+            val host = matcher.group(1)
+            val port = matcher.group(2)?.toInt() ?: DEFAULT_PORT
+            val pairCode = matcher.group(3) ?: ""
             val address = InetSocketAddress(host, port)
             Log.d(TAG, "parseUri: pairCode=$pairCode\thost=$host\tport=$port\t")
             return PairDevice(pairCode, DeviceConfig(address.hostName, "$host:$port"))

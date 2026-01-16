@@ -90,6 +90,9 @@ class AudioService : Service() {
             val device = Device(appConfigRepository,pairDevice.device)
             device.connect()
             device.startListening(scope)
+            device.pair(pairDevice.pairCode)
+            appConfigRepository.addDeviceConfig(device.config)
+            appConfigRepository.addDevice(device)
         }
     }
 

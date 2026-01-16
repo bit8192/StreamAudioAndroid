@@ -1,5 +1,5 @@
 package cn.bincker.stream.sound
 
 object Constant {
-    const val APPLICATION_URI_PREFIX = "streamaudio://"
+    const val APPLICATION_URI_PREFIX = "sa://"
 }
