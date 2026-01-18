@@ -209,8 +209,8 @@ fun SocketChannel.writeMessage(queueNum: Int, message: Message<*>, key: Ed25519P
     Log.d(TAG, "writeMessage: $message")
     message.toByteBuffer(queueNum, key).let {
         it.flip()
-        Log.d(TAG, "writeMessage: ${it.array().toHexString()}")
         write(it)
+        Log.d(TAG, "writeMessage: ${it.array().toHexString(0, it.limit())}")
     }
 }
 

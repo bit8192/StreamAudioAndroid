@@ -5,7 +5,6 @@ import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import cn.bincker.stream.sound.config.AppConfig
 import cn.bincker.stream.sound.config.DeviceConfig
-import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.utils.generateEd25519AsBase64
 import cn.bincker.stream.sound.utils.generateX25519KeyPair
 import cn.bincker.stream.sound.utils.loadPrivateEd25519
@@ -64,9 +63,6 @@ class AppConfigRepository {
     //配置文件中的设备列表
     private val _deviceConfigList = mutableStateListOf<DeviceConfig>()
     val deviceConfigList: List<DeviceConfig> get() = _deviceConfigList
-    //连接的设备列表
-    private val _deviceList = mutableStateListOf<Device>()
-    val deviceList: List<Device> get() = _deviceList
 
     companion object{
         init {
@@ -151,5 +147,4 @@ class AppConfigRepository {
         _deviceConfigList.add(config)
         saveAppConfig()
     }
-    fun addDevice(device: Device) = _deviceList.add(device)
 }

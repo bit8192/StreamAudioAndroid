@@ -1,3 +1,20 @@
 <resources>
     <string name="app_name">StreamAudio</string>
+
+    <!-- Device Card Strings -->
+    <string name="device_connecting">正在连接...</string>
+    <string name="device_connected">已连接</string>
+    <string name="device_disconnected">未连接</string>
+    <string name="device_connect_failed">连接失败: %s</string>
+    <string name="device_playing">正在播放</string>
+    <string name="device_play">播放</string>
+    <string name="device_stop">停止</string>
+    <string name="device_error_network">网络连接失败</string>
+    <string name="device_error_auth">设备认证失败</string>
+    <string name="device_error_timeout">连接超时</string>
+    <string name="device_error_unknown">未知错误</string>
+    <string name="device_status_icon">连接状态图标</string>
+    <string name="device_connection_error">连接错误</string>
+    <string name="device_tap_to_connect">点击连接</string>
+    <string name="device_tap_to_disconnect">点击断开</string>
 </resources>

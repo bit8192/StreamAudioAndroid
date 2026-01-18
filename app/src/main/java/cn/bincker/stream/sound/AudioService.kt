@@ -11,12 +11,15 @@ import androidx.core.content.getSystemService
 import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.entity.PairDevice
 import cn.bincker.stream.sound.repository.AppConfigRepository
+import cn.bincker.stream.sound.service.DeviceConnectionManager
+import cn.bincker.stream.sound.vm.ConnectionState
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -40,10 +43,61 @@ private const val TAG = "AudioService"
 class AudioService : Service() {
     @Inject
     lateinit var appConfigRepository: AppConfigRepository
+
+    @Inject
+    lateinit var deviceConnectionManager: DeviceConnectionManager
+
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    inner class AudioServiceBinder: Binder(){
-        fun pairDevice(uri: String){
+    inner class AudioServiceBinder: Binder() {
+        // 获取连接管理器的状态流
+        fun getConnectionStates(): StateFlow<Map<String, ConnectionState>> =
+            deviceConnectionManager.connectionStates
+
+        fun getPlayingStates(): StateFlow<Map<String, Boolean>> =
+            deviceConnectionManager.playingStates
+
+        fun getErrorMessages(): StateFlow<Map<String, String?>> =
+            deviceConnectionManager.errorMessages
+
+        // 获取设备列表
+        fun getDeviceList(): List<Device> = deviceConnectionManager.deviceList
+
+        // 刷新设备列表
+        fun refreshDeviceList() {
+            scope.launch {
+                deviceConnectionManager.refreshDeviceList()
+            }
+        }
+
+        // 连接设备
+        fun connectDevice(device: Device) {
+            scope.launch {
+                deviceConnectionManager.connectDevice(device, scope)
+            }
+        }
+
+        // 断开设备
+        fun disconnectDevice(deviceId: String) {
+            scope.launch {
+                deviceConnectionManager.disconnectDevice(deviceId)
+            }
+        }
+
+        // 切换播放状态
+        fun togglePlayback(deviceId: String) {
+            scope.launch {
+                deviceConnectionManager.togglePlayback(deviceId, scope)
+            }
+        }
+
+        // 清除错误
+        fun clearError(deviceId: String) {
+            deviceConnectionManager.clearError(deviceId)
+        }
+
+        // 配对设备
+        fun pairDevice(uri: String) {
             this@AudioService.startService(Intent(this@AudioService, AudioService::class.java).apply {
                 putExtra(INTENT_EXTRA_KEY_CMD, AudioServiceCommandEnum.PAIR.name)
                 putExtra(INTENT_EXTRA_KEY_PAIR_URI, uri)
@@ -58,6 +112,7 @@ class AudioService : Service() {
         val channel = NotificationChannel(notificationId, "stream audio notification channel", NotificationManager.IMPORTANCE_LOW)
         getSystemService<NotificationManager>()!!.createNotificationChannel(channel)
         startForeground(1, Notification.Builder(this, notificationId).setContentTitle(getString(R.string.app_name)).setContentText("playing...").setSmallIcon(R.drawable.ic_launcher_foreground).build())
+
         val cmd = intent?.getStringExtra(INTENT_EXTRA_KEY_CMD)?.let {
             try {
                 AudioServiceCommandEnum.valueOf(it)
@@ -88,12 +143,14 @@ class AudioService : Service() {
         withContext(Dispatchers.IO) {
             Log.d(TAG, "pair: $uri")
             val pairDevice = PairDevice.parseUri(uri)
-            val device = Device(appConfigRepository,pairDevice.device)
+            val device = Device(deviceConnectionManager,pairDevice.device)
             var listenerJob: Job? = null
             try {
                 device.connect()
                 listenerJob = device.startListening(scope)
                 device.pair(pairDevice.pairCode)
+                // 配对成功后，将设备添加到DeviceConnectionManager
+                deviceConnectionManager.addDevice(device, listenerJob)
             }catch (e: Exception){
                 listenerJob?.cancel()
                 device.disconnect()
@@ -104,7 +161,7 @@ class AudioService : Service() {
 
     private suspend fun connect(deviceName: String){
         withContext(Dispatchers.IO) {
-            val device = appConfigRepository.deviceList.find { it.config.name == deviceName }
+            val device = deviceConnectionManager.deviceList.find { it.config.name == deviceName }
                 ?: throw Exception("device [$deviceName] not found")
             device.connect()
             device.startListening(scope)
@@ -114,6 +171,9 @@ class AudioService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        scope.launch {
+            deviceConnectionManager.cleanup()
+        }
         scope.cancel()
     }
 

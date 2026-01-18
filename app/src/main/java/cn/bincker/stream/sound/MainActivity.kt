@@ -30,12 +30,17 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -44,6 +49,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import cn.bincker.stream.sound.ui.components.DeviceCard
+import cn.bincker.stream.sound.vm.ConnectionState
 import androidx.core.app.ActivityCompat.requestPermissions
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.bincker.stream.sound.config.DeviceConfig
@@ -92,10 +99,16 @@ class MainActivity : ComponentActivity() {
         bindService(Intent(this, AudioService::class.java), object: ServiceConnection{
             override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
                 audioServiceBinder = service as AudioService.AudioServiceBinder?
+                // 将Service Binder传递给ViewModel
+                vm.setServiceBinder(audioServiceBinder)
+                // 刷新设备列表
+                vm.refresh(this@MainActivity)
             }
 
             override fun onServiceDisconnected(name: ComponentName?) {
                 audioServiceBinder = null
+                // 清除ViewModel中的Service Binder
+                vm.setServiceBinder(null)
             }
         }, BIND_AUTO_CREATE)
 
@@ -110,7 +123,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        vm.refresh(this)
+        // 启动Service作为前台服务
+        startService(Intent(this, AudioService::class.java))
     }
 }
 
@@ -119,20 +133,54 @@ class MainActivity : ComponentActivity() {
 fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel){
     val pullToRefreshState = rememberPullToRefreshState()
     val context = LocalContext.current
-    val refresh = vm.isRefresh.collectAsState()
+    val refresh by vm.isRefresh.collectAsState()
+    val connectionStates by vm.connectionStates.collectAsState()
+    val playingStates by vm.playingStates.collectAsState()
+    val errorMessages by vm.errorMessages.collectAsState()
+
     Box(modifier = modifier.fillMaxSize()) {
-        PullToRefreshBox(refresh.value, onRefresh = {
+        PullToRefreshBox(refresh, onRefresh = {
             vm.refresh(context)
         }, state = pullToRefreshState) {
-            LazyColumn(modifier = Modifier
-                .fillMaxSize()
-                , verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                items(vm.deviceList.toList(), {it.config.address}) {
-                    Column(modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { }) {
-                        Text(it.config.name, fontSize = 36.sp, modifier = Modifier.padding(10.dp, 0.dp))
-                    }
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    horizontal = 16.dp,
+                    vertical = 8.dp
+                )
+            ) {
+                items(vm.deviceList, { it.config.address }) { device ->
+                    val deviceId = device.config.address
+                    val connectionState = connectionStates[deviceId] ?: ConnectionState.DISCONNECTED
+                    val isPlaying = playingStates[deviceId] ?: false
+                    val errorMessage = errorMessages[deviceId]
+
+                    DeviceCard(
+                        device = device,
+                        connectionState = connectionState,
+                        isPlaying = isPlaying,
+                        errorMessage = errorMessage,
+                        onCardClick = {
+                            when (connectionState) {
+                                ConnectionState.DISCONNECTED, ConnectionState.ERROR -> {
+                                    vm.connectDevice(device)
+                                }
+                                ConnectionState.CONNECTED -> {
+                                    vm.disconnectDevice(deviceId)
+                                }
+                                ConnectionState.CONNECTING -> {
+                                    // 连接中，不做任何操作
+                                }
+                            }
+                        },
+                        onPlayStopClick = {
+                            vm.togglePlayback(deviceId)
+                        },
+                        onErrorDismiss = {
+                            vm.clearError(deviceId)
+                        }
+                    )
                 }
             }
         }
@@ -142,8 +190,19 @@ fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel){
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLauncher<ScanOptions>? = null) {
+    val snackbarHostState = remember { SnackbarHostState() }
+    val errorMessages by vm.errorMessages.collectAsState()
+
+    // 显示错误消息
+    LaunchedEffect(errorMessages) {
+        errorMessages.values.firstOrNull { it != null }?.let { error ->
+            snackbarHostState.showSnackbar(error)
+        }
+    }
+
     Scaffold(
         modifier = Modifier.fillMaxSize().background(Color(255, 200, 200)),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.app_name)) },

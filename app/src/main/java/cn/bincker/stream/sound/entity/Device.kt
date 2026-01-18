@@ -5,7 +5,7 @@ import cn.bincker.stream.sound.ProtocolMagicEnum
 import cn.bincker.stream.sound.ProtocolMagicEnum.ECDH
 import cn.bincker.stream.sound.ProtocolMagicEnum.ECDH_RESPONSE
 import cn.bincker.stream.sound.config.DeviceConfig
-import cn.bincker.stream.sound.repository.AppConfigRepository
+import cn.bincker.stream.sound.service.DeviceConnectionManager
 import cn.bincker.stream.sound.utils.hMacSha256
 import cn.bincker.stream.sound.utils.loadPublicEd25519
 import cn.bincker.stream.sound.utils.loadPublicX25519
@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import cn.bincker.stream.sound.utils.toHexString
 
 class Device(
-    val appConfigRepository: AppConfigRepository,
+    val connectionManager: DeviceConnectionManager?,
     val config: DeviceConfig,
     var channel: SocketChannel? = null,
     val msgWaitTimeout: Long = 5000,
@@ -177,31 +177,36 @@ class Device(
     } ?: throw Exception("device [${config.name}] ecdh no response received")
 
     suspend fun pair(pairCode: String) {
+        val manager = connectionManager
+            ?: throw IllegalStateException("AppConfigRepository is required for pairing")
+
         withChannel {
             val msgId = messageIdNum.getAndIncrement()
             val queueNum = messageQueueNum.getAndIncrement()
             val key = Base64.getDecoder().decode(pairCode).sha256()
-            Log.d(TAG, "pair: key=${key.toHexString()}")
+            Log.d(TAG, "pair: key=${key.toHexString()}}")
             writeMessage(
                 queueNum,
                 Message.build(
                     ProtocolMagicEnum.PAIR,
                     msgId,
-                    ByteArrayMessageBody.buildAes256gcmEncryptedBody(appConfigRepository.publicKey.encoded, key)
+                    ByteArrayMessageBody.buildAes256gcmEncryptedBody(manager.publicKey.encoded, key)
                 ),
-                appConfigRepository.privateKey
+                manager.privateKey
             )
             val response = waitResponse<ByteArrayMessageBody>(msgId, ProtocolMagicEnum.PAIR_RESPONSE)
-            loadPublicEd25519(response.body.decryptAes256gcm(appConfigRepository.publicKey.encoded.sha256()).data).let {
+            loadPublicEd25519(response.body.decryptAes256gcm(manager.publicKey.encoded.sha256()).data).let {
                 publicKey = it
                 config.publicKey = Base64.getEncoder().encodeToString(it.encoded)
+                Log.d(TAG, "pair success: mineKey=${manager.publicKey.encoded.toHexString()}\tthitherKey=${it.encoded.toHexString()}")
             }
-            appConfigRepository.addDeviceConfig(config)
-            appConfigRepository.addDevice(this@Device)
         }
     }
 
     suspend fun ecdh() {
+        val repository = connectionManager
+            ?: throw IllegalStateException("AppConfigRepository is required for ECDH")
+
         withChannel {
             val msgId = messageIdNum.getAndIncrement()
             val queueNum = messageQueueNum.getAndIncrement()
@@ -215,19 +220,14 @@ class Device(
                 Message.build(
                     ECDH,
                     msgId,
-                    X25519PublicKeyMessageBody(appConfigRepository.ecdhKeyPair.public as X25519PublicKeyParameters)
-                )
-                    .toAes256gcmEncryptedMessage(
-                        queueNum,
-                        appConfigRepository.privateKey,
-                        encryptKey
-                    ),
-                appConfigRepository.privateKey
+                    ByteArrayMessageBody.buildAes256gcmEncryptedBody((repository.ecdhKeyPair.public as X25519PublicKeyParameters).encoded, encryptKey)
+                ),
+                repository.privateKey
             )
 
             waitResponse<ByteArrayMessageBody>(msgId, ECDH_RESPONSE).let { response->
                 // Decrypt with OWN Ed25519 public key SHA256
-                val decryptKey = appConfigRepository.publicKey.encoded.sha256()
+                val decryptKey = repository.publicKey.encoded.sha256()
                 val decryptedMsg = response.body.decryptAes256gcmToMsg(decryptKey, publicKey)
                     ?: throw Exception("Failed to decrypt ECDH_RESPONSE")
 
@@ -238,7 +238,7 @@ class Device(
 
                 // 生成原始 X25519 共享密钥
                 val rawSharedSecret = ByteArray(X25519.POINT_SIZE)
-                (appConfigRepository.ecdhKeyPair.private as X25519PrivateKeyParameters)
+                (repository.ecdhKeyPair.private as X25519PrivateKeyParameters)
                     .generateSecret(serverX25519PublicKey, rawSharedSecret, 0)
                 sessionKey = rawSharedSecret.sha256()
 
@@ -255,6 +255,9 @@ class Device(
     }
 
     suspend fun play(udpPort: Int = 8888) {
+        val repository = connectionManager
+            ?: throw IllegalStateException("AppConfigRepository is required for play")
+
         withChannel {
             if (!ecdhCompleted) {
                 throw Exception("ECDH not completed, cannot play")
@@ -279,10 +282,10 @@ class Device(
                     ByteArrayMessageBody(bodyBytes)
                 ).toAes256gcmEncryptedMessage(
                     queueNum,
-                    appConfigRepository.privateKey,
+                    repository.privateKey,
                     sessionKey
                 ),
-                appConfigRepository.privateKey
+                repository.privateKey
             )
 
             // Wait for PLAY_RESPONSE
@@ -331,6 +334,9 @@ class Device(
     }
 
     suspend fun stop() {
+        val repository = connectionManager
+            ?: throw IllegalStateException("AppConfigRepository is required for stop")
+
         withChannel {
             val msgId = messageIdNum.getAndIncrement()
             val queueNum = messageQueueNum.getAndIncrement()
@@ -344,10 +350,10 @@ class Device(
                     ByteArrayMessageBody(ByteArray(0))
                 ).toAes256gcmEncryptedMessage(
                     queueNum,
-                    appConfigRepository.privateKey,
+                    repository.privateKey,
                     sessionKey
                 ),
-                appConfigRepository.privateKey
+                repository.privateKey
             )
 
             // Wait for STOP_RESPONSE

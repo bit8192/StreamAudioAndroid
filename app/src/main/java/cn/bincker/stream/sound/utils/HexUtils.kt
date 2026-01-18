@@ -1,9 +1,9 @@
 package cn.bincker.stream.sound.utils
 
 private val hexArray = "0123456789abcdef".toCharArray()
-fun ByteArray.toHexString(): String {
-    val hexChars = CharArray(size * 2)
-    for (j in indices) {
+fun ByteArray.toHexString(index: Int = 0, length: Int = size): String {
+    val hexChars = CharArray(length * 2)
+    for (j in 0 until length) {
         val v = get(j).toInt() and 0xFF
         hexChars[j * 2] = hexArray[v.ushr(4)]
         hexChars[j * 2 + 1] = hexArray[v and 0x0F]
