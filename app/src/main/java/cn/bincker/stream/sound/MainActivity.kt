@@ -137,6 +137,8 @@ fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel){
     val connectionStates by vm.connectionStates.collectAsState()
     val playingStates by vm.playingStates.collectAsState()
     val errorMessages by vm.errorMessages.collectAsState()
+    Log.d(TAG, "DevicesList: deviceList=${vm.deviceList}")
+    val deviceList by vm.deviceList.collectAsState()
 
     Box(modifier = modifier.fillMaxSize()) {
         PullToRefreshBox(refresh, onRefresh = {
@@ -150,7 +152,7 @@ fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel){
                     vertical = 8.dp
                 )
             ) {
-                items(vm.deviceList, { it.config.address }) { device ->
+                items(deviceList, { it.config.address }) { device ->
                     val deviceId = device.config.address
                     val connectionState = connectionStates[deviceId] ?: ConnectionState.DISCONNECTED
                     val isPlaying = playingStates[deviceId] ?: false
@@ -201,7 +203,9 @@ private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLaunche
     }
 
     Scaffold(
-        modifier = Modifier.fillMaxSize().background(Color(255, 200, 200)),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(255, 200, 200)),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(

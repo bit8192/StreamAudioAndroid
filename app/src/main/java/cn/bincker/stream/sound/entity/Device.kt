@@ -228,13 +228,8 @@ class Device(
             waitResponse<ByteArrayMessageBody>(msgId, ECDH_RESPONSE).let { response->
                 // Decrypt with OWN Ed25519 public key SHA256
                 val decryptKey = repository.publicKey.encoded.sha256()
-                val decryptedMsg = response.body.decryptAes256gcmToMsg(decryptKey, publicKey)
-                    ?: throw Exception("Failed to decrypt ECDH_RESPONSE")
-
-                val serverX25519Body = decryptedMsg.body as? ByteArrayMessageBody
-                    ?: throw Exception("Invalid ECDH_RESPONSE body")
-
-                val serverX25519PublicKey = loadPublicX25519(serverX25519Body.data)
+                val decryptedMsg = response.body.decryptAes256gcm(decryptKey)
+                val serverX25519PublicKey = loadPublicX25519(decryptedMsg.data)
 
                 // 生成原始 X25519 共享密钥
                 val rawSharedSecret = ByteArray(X25519.POINT_SIZE)
@@ -289,11 +284,8 @@ class Device(
             )
 
             // Wait for PLAY_RESPONSE
-            waitResponse<ByteArrayMessageBody>(msgId, ProtocolMagicEnum.PLAY_RESPONSE).let { response ->
-                val decrypted = response.body.decryptAes256gcmToMsg(sessionKey, publicKey)
-                    ?: throw Exception("Failed to decrypt PLAY_RESPONSE")
-
-                val body = (decrypted.body as ByteArrayMessageBody).data
+            waitResponse<ByteArrayMessageBody>(msgId, ProtocolMagicEnum.PLAY_RESPONSE).let { msg ->
+                val body = msg.body.data
                 val buffer = ByteBuffer.wrap(body)
 
                 val serverUdpPort = buffer.getShort().toInt() and 0xFFFF

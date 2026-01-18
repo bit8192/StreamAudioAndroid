@@ -29,29 +29,76 @@ class DeviceListViewModel @Inject constructor(
     // Service绑定
     private var serviceBinder: AudioService.AudioServiceBinder? = null
 
+    // Service状态流收集Jobs
+    private var serviceFlowJobs = mutableListOf<kotlinx.coroutines.Job>()
+
     // 刷新状态
     private val _isRefresh = MutableStateFlow(false)
     val isRefresh: StateFlow<Boolean> get() = _isRefresh.asStateFlow()
 
-    // 从Service获取的状态流（如果Service未绑定则使用默认值）
-    val connectionStates: StateFlow<Map<String, ConnectionState>>
-        get() = serviceBinder?.getConnectionStates() ?: MutableStateFlow(emptyMap())
+    // 持久化的状态流（避免重新创建）
+    private val _connectionStates = MutableStateFlow<Map<String, ConnectionState>>(emptyMap())
+    val connectionStates: StateFlow<Map<String, ConnectionState>> = _connectionStates.asStateFlow()
 
-    val playingStates: StateFlow<Map<String, Boolean>>
-        get() = serviceBinder?.getPlayingStates() ?: MutableStateFlow(emptyMap())
+    private val _playingStates = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val playingStates: StateFlow<Map<String, Boolean>> = _playingStates.asStateFlow()
 
-    val errorMessages: StateFlow<Map<String, String?>>
-        get() = serviceBinder?.getErrorMessages() ?: MutableStateFlow(emptyMap())
+    private val _errorMessages = MutableStateFlow<Map<String, String?>>(emptyMap())
+    val errorMessages: StateFlow<Map<String, String?>> = _errorMessages.asStateFlow()
 
-    // 设备列表
-    val deviceList: List<Device>
-        get() = serviceBinder?.getDeviceList() ?: emptyList()
+    // 设备列表 StateFlow - 持久化的StateFlow
+    private val _deviceList = MutableStateFlow<List<Device>>(emptyList())
+    val deviceList: StateFlow<List<Device>> = _deviceList.asStateFlow()
 
     /**
      * 设置Service Binder
      */
     fun setServiceBinder(binder: AudioService.AudioServiceBinder?) {
+        // 取消之前的收集任务
+        serviceFlowJobs.forEach { it.cancel() }
+        serviceFlowJobs.clear()
+
         serviceBinder = binder
+
+        // 如果有新的binder，开始收集Service的状态流
+        if (binder != null) {
+            // 收集连接状态
+            serviceFlowJobs.add(
+                viewModelScope.launch {
+                    binder.getConnectionStates().collect { states ->
+                        _connectionStates.value = states
+                    }
+                }
+            )
+
+            // 收集播放状态
+            serviceFlowJobs.add(
+                viewModelScope.launch {
+                    binder.getPlayingStates().collect { states ->
+                        _playingStates.value = states
+                    }
+                }
+            )
+
+            // 收集错误消息
+            serviceFlowJobs.add(
+                viewModelScope.launch {
+                    binder.getErrorMessages().collect { messages ->
+                        _errorMessages.value = messages
+                    }
+                }
+            )
+
+            // 收集设备列表
+            serviceFlowJobs.add(
+                viewModelScope.launch {
+                    binder.getDeviceList().collect { devices ->
+                        _deviceList.value = devices
+                        Log.d(TAG, "Device list updated from service: ${devices.size} devices")
+                    }
+                }
+            )
+        }
     }
 
     /**
@@ -67,7 +114,7 @@ class DeviceListViewModel @Inject constructor(
                 // 委托给Service刷新设备列表
                 serviceBinder?.refreshDeviceList()
                     ?: Log.w(TAG, "Cannot refresh device list: Service not bound")
-                Log.d(TAG, "devices size: ${deviceList.size}")
+                Log.d(TAG, "devices size: ${_deviceList.value.size}")
             } finally {
                 _isRefresh.value = false
             }
@@ -113,5 +160,12 @@ class DeviceListViewModel @Inject constructor(
     fun addTestDevices() {
         // 仅用于预览，实际运行时设备通过Service管理
         Log.w(TAG, "addTestDevices called - this should only be used in Preview mode")
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        // 取消所有的收集任务
+        serviceFlowJobs.forEach { it.cancel() }
+        serviceFlowJobs.clear()
     }
 }

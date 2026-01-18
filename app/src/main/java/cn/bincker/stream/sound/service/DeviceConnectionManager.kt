@@ -1,7 +1,6 @@
 package cn.bincker.stream.sound.service
 
 import android.util.Log
-import androidx.compose.runtime.mutableStateListOf
 import cn.bincker.stream.sound.config.DeviceConfig
 import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.repository.AppConfigRepository
@@ -32,8 +31,8 @@ class DeviceConnectionManager @Inject constructor(
     }
 
     // 设备列表
-    private val _deviceList = mutableStateListOf<Device>()
-    val deviceList: List<Device> get() = _deviceList
+    private val _deviceList = MutableStateFlow<List<Device>>(emptyList())
+    val deviceList: StateFlow<List<Device>> = _deviceList.asStateFlow()
 
     // 连接状态管理
     private val _connectionStates = MutableStateFlow<Map<String, ConnectionState>>(emptyMap())
@@ -65,18 +64,21 @@ class DeviceConnectionManager @Inject constructor(
 
     val ecdhKeyPair get() = appConfigRepository.ecdhKeyPair
 
+    init {
+        Log.d(TAG, "deviceList: $_deviceList")
+    }
     /**
      * 初始化设备列表
      * 从AppConfigRepository的deviceConfigList中加载
      */
     suspend fun initializeDeviceList() {
         mutex.withLock {
-            _deviceList.clear()
             val deviceConfigs = appConfigRepository.deviceConfigList
-            deviceConfigs.forEach { config ->
-                _deviceList.add(Device(this, config))
+            val newDeviceList = deviceConfigs.map { config ->
+                Device(this, config)
             }
-            Log.d(TAG, "Initialized device list with ${_deviceList.size} devices")
+            _deviceList.value = newDeviceList
+            Log.d(TAG, "Initialized device list with ${newDeviceList.size} devices")
         }
     }
 
@@ -85,13 +87,16 @@ class DeviceConnectionManager @Inject constructor(
      */
     suspend fun addDevice(device: Device, job: Job) {
         mutex.withLock {
-            if (_deviceList.none { it.config.address == device.config.address }) {
-                _deviceList.add(device)
+            if (_deviceList.value.none { it.config.address == device.config.address }) {
+                // 更新设备列表
+                _deviceList.value += device
                 // 同时添加到配置中
                 appConfigRepository.addDeviceConfig(device.config)
+                appConfigRepository.saveAppConfig()
                 Log.d(TAG, "Added device: ${device.config.name} (${device.config.address})")
                 listeningJobs[device.config.address] = job
                 ecdh(device)
+                activeDevices[getDeviceId(device)] = device
             }
         }
     }

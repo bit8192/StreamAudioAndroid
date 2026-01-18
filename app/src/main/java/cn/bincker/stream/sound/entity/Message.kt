@@ -5,13 +5,11 @@ import cn.bincker.stream.sound.BuildConfig
 import cn.bincker.stream.sound.ProtocolMagicEnum
 import cn.bincker.stream.sound.utils.aes256gcmDecrypt
 import cn.bincker.stream.sound.utils.aes256gcmEncrypt
-import cn.bincker.stream.sound.utils.crc16
-import cn.bincker.stream.sound.utils.getCrc16
 import cn.bincker.stream.sound.utils.putCrc16
 import cn.bincker.stream.sound.utils.putSign
 import cn.bincker.stream.sound.utils.toHexString
 import cn.bincker.stream.sound.utils.verifyAndGetSign
-import cn.bincker.stream.sound.utils.verifyCrc16
+import cn.bincker.stream.sound.utils.verifyAndGetCrc16
 import cn.bincker.stream.sound.utils.verifySign
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
@@ -234,22 +232,21 @@ fun ByteBuffer.getMessage(verifySignKey: Ed25519PublicKeyParameters? = null): Me
     val sign = verifySignKey?.let { verifyAndGetSign(it) } ?: ByteArray(Ed25519.SIGNATURE_SIZE).also {
         get(it)
     }
-    val validCrc = verifyCrc16()
-    val crc = getCrc16()
-    if (!validCrc){
-        Log.d(TAG, "getMessage: invalid crc, crc=$crc\tcalcCrc=${position(position() - 2).let { crc16() }}\thex=${array().toHexString()}")
+    try {
+        return Message(
+            magic = magic,
+            version = version,
+            queueNum = queueNum,
+            id = id,
+            packLength = length,
+            body = ByteArrayMessageBody(bodyBytes),
+            sign,
+            verifyAndGetCrc16()
+        ).let { resolveMessage(it) }
+    }catch (e: Exception) {
+        Log.e(TAG, "getMessage: verify message fail: hex=${array().toHexString(0, position())}", e)
         return null
     }
-    return Message(
-        magic = magic,
-        version = version,
-        queueNum = queueNum,
-        id = id,
-        packLength = length,
-        body = ByteArrayMessageBody(bodyBytes),
-        sign,
-        crc
-    ).let { resolveMessage(it) }
 }
 
 fun resolveMessage(msg: Message<ByteArrayMessageBody>): Message<out MessageBody> = when(msg.magic) {

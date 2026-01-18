@@ -58,8 +58,15 @@ fun ByteBuffer.crc16() = Crc16.calculate(array(), arrayOffset(), position())
  * @param expectedCrc16 期望的 CRC16 值
  * @return 校验是否通过
  */
-fun ByteBuffer.verifyCrc16(expectedCrc16: Int = peekCrc16()): Boolean {
-    return crc16() == expectedCrc16
+@OptIn(ExperimentalStdlibApi::class)
+fun ByteBuffer.verifyAndGetCrc16(expectedCrc16: Int? = null): Int {
+    crc16().let {
+        val expected = expectedCrc16 ?: getCrc16()
+        if(it != expected){
+            throw Exception("CRC16 校验失败: expected=${expected.toHexString()}, actual=${it.toHexString()}")
+        }
+        return expected
+    }
 }
 
 /**

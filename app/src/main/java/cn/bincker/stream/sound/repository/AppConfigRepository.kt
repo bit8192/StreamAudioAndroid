@@ -9,11 +9,8 @@ import cn.bincker.stream.sound.utils.generateEd25519AsBase64
 import cn.bincker.stream.sound.utils.generateX25519KeyPair
 import cn.bincker.stream.sound.utils.loadPrivateEd25519
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -45,12 +42,7 @@ private val YAML: Yaml = Yaml(Constructor(AppConfig::class.java, LoaderOptions()
 
 class AppConfigRepository {
     private val context: Context
-    private var _appConfig = MutableStateFlow<AppConfig?>(null)
-    val appConfig = _appConfig.stateIn(
-        CoroutineScope(Dispatchers.Default),
-        SharingStarted.WhileSubscribed(5000),
-        AppConfig()
-    )
+    private lateinit var appConfig: AppConfig
     private val mutex = Mutex()
     private constructor(context: Context){
         this.context = context
@@ -78,14 +70,12 @@ class AppConfigRepository {
         refresh()
     }
 
-    suspend fun getConfig() = _appConfig.value ?: refreshAndGetConfig()
-
     suspend fun refresh() {
         refreshAndGetConfig()
     }
 
     suspend fun refreshAndGetConfig() = mutex.withLock { loadAppConfig().also {
-        _appConfig.value = it
+        appConfig = it
         if (it.privateKey.isNotBlank()){
             _privateKey = loadPrivateEd25519(it.privateKey)
         }else{
@@ -94,7 +84,7 @@ class AppConfigRepository {
         }
         _publicKey = _privateKey.generatePublicKey()
         _deviceConfigList.clear()
-        appConfig.value?.devices?.let { configs-> _deviceConfigList.addAll(configs) }
+        _deviceConfigList.addAll(appConfig.devices)
     }}
 
     fun getConfigFilePath() = Path(context.filesDir.path,CONFIG_FILE_PATH)
@@ -137,7 +127,7 @@ class AppConfigRepository {
     }
 
     suspend fun saveAppConfig() {
-        _appConfig.value?.let {
+        appConfig.let {
             it.devices = deviceConfigList
             saveAppConfig(it)
         }

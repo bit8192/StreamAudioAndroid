@@ -60,8 +60,8 @@ class AudioService : Service() {
         fun getErrorMessages(): StateFlow<Map<String, String?>> =
             deviceConnectionManager.errorMessages
 
-        // 获取设备列表
-        fun getDeviceList(): List<Device> = deviceConnectionManager.deviceList
+        // 获取设备列表 StateFlow
+        fun getDeviceList(): StateFlow<List<Device>> = deviceConnectionManager.deviceList
 
         // 刷新设备列表
         fun refreshDeviceList() {
@@ -113,6 +113,11 @@ class AudioService : Service() {
         getSystemService<NotificationManager>()!!.createNotificationChannel(channel)
         startForeground(1, Notification.Builder(this, notificationId).setContentTitle(getString(R.string.app_name)).setContentText("playing...").setSmallIcon(R.drawable.ic_launcher_foreground).build())
 
+        // 初始化设备列表
+        scope.launch {
+            deviceConnectionManager.initializeDeviceList()
+        }
+
         val cmd = intent?.getStringExtra(INTENT_EXTRA_KEY_CMD)?.let {
             try {
                 AudioServiceCommandEnum.valueOf(it)
@@ -161,7 +166,7 @@ class AudioService : Service() {
 
     private suspend fun connect(deviceName: String){
         withContext(Dispatchers.IO) {
-            val device = deviceConnectionManager.deviceList.find { it.config.name == deviceName }
+            val device = deviceConnectionManager.deviceList.value.find { it.config.name == deviceName }
                 ?: throw Exception("device [$deviceName] not found")
             device.connect()
             device.startListening(scope)

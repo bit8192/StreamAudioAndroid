@@ -21,6 +21,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import cn.bincker.stream.sound.utils.hexToByteArray
+import cn.bincker.stream.sound.utils.sha256
 import cn.bincker.stream.sound.utils.toHexString
 
 class CryptoTest {
@@ -116,5 +117,14 @@ class CryptoTest {
         aes256gcmDecrypt(ciphertext, key, iv).let {
             println("decryptedData: " + it.toHexString())
         }
+    }
+
+    @Test
+    fun sessionKeyTest() {
+        println(
+            "15926ccbd0011aee15b37257a7a2821d0f1ee9e1ab74cd993f22998d6258d623".hexToByteArray()
+                .sha256()
+                .toHexString()
+        )
     }
 }

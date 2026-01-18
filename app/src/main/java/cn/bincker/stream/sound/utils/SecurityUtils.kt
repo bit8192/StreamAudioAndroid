@@ -43,6 +43,9 @@ fun generateX25519KeyPair(): AsymmetricCipherKeyPair = X25519KeyPairGenerator().
     it.generateKeyPair()
 }
 
+/**
+ * 校验sign，并不移动position
+ */
 fun ByteBuffer.verifySign(key: Ed25519PublicKeyParameters) = key.verify(
     Ed25519.Algorithm.Ed25519,
     null,
@@ -60,7 +63,7 @@ fun ByteBuffer.verifyAndGetSign(key: Ed25519PublicKeyParameters): ByteArray{
     if(!verifySign(key)){
         throw Exception("verify sign fail: hex=${this.array().toHexString()}\tpos=${position()}}")
     }
-    return array().copyOfRange(arrayOffset() + position(), arrayOffset() + position() + Ed25519.SIGNATURE_SIZE)
+    return ByteArray(Ed25519.SIGNATURE_SIZE).also { get(it) }
 }
 
 /**
@@ -112,7 +115,7 @@ fun ByteArray.sha256(): ByteArray {
  * 使用 AES-256-GCM 加密数据
  */
 fun aes256gcmEncrypt(plainText: ByteArray, key: ByteArray, iv: ByteArray): ByteArray {
-//    Log.d(TAG, "aes256gcmEncrypt: plainText=${plainText.toHexString()}\tkey=${key.toHexString()}\tiv=${iv.toHexString()}")
+    Log.d(TAG, "aes256gcmEncrypt: plainText=${plainText.toHexString()}\tkey=${key.toHexString()}\tiv=${iv.toHexString()}")
     val cipher = Cipher.getInstance("AES/GCM/NoPadding")
     val keySpec = SecretKeySpec(key, "AES")
     val gcmSpec = GCMParameterSpec(128, iv)
