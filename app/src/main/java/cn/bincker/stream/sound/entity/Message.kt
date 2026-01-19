@@ -97,6 +97,116 @@ data class StringMessageBody(
     override fun length() = message.toByteArray().size
 }
 
+/**
+ * 认证请求消息体
+ * 用于已配对设备的快速认证
+ */
+data class AuthenticationMessageBody(
+    val deviceIdentifier: ByteArray,  // 设备标识：ED25519公钥的前32字节
+    val randomChallenge: ByteArray    // 32字节随机挑战值
+): MessageBody {
+    init {
+        require(deviceIdentifier.size == 32) { "Device identifier must be 32 bytes" }
+        require(randomChallenge.size == 32) { "Random challenge must be 32 bytes" }
+    }
+
+    override fun toByteArray(): ByteArray {
+        val buffer = ByteBuffer.allocate(1 + deviceIdentifier.size + 1 + randomChallenge.size)
+
+        // 写入设备标识长度和数据
+        buffer.put(deviceIdentifier.size.toByte())
+        buffer.put(deviceIdentifier)
+
+        // 写入挑战值长度和数据
+        buffer.put(randomChallenge.size.toByte())
+        buffer.put(randomChallenge)
+
+        return buffer.array()
+    }
+
+    override fun length() = 1 + deviceIdentifier.size + 1 + randomChallenge.size
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as AuthenticationMessageBody
+
+        if (!deviceIdentifier.contentEquals(other.deviceIdentifier)) return false
+        if (!randomChallenge.contentEquals(other.randomChallenge)) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = deviceIdentifier.contentHashCode()
+        result = 31 * result + randomChallenge.contentHashCode()
+        return result
+    }
+
+    companion object {
+        fun fromByteBuffer(buffer: ByteBuffer): AuthenticationMessageBody {
+            // 读取设备标识
+            val idLen = buffer.get().toInt() and 0xFF
+            val deviceId = ByteArray(idLen)
+            buffer.get(deviceId)
+
+            // 读取挑战值
+            val challengeLen = buffer.get().toInt() and 0xFF
+            val challenge = ByteArray(challengeLen)
+            buffer.get(challenge)
+
+            return AuthenticationMessageBody(deviceId, challenge)
+        }
+    }
+}
+
+/**
+ * 认证响应消息体
+ * 服务器对认证请求的响应
+ */
+data class AuthenticationResponseMessageBody(
+    val success: Boolean,           // 认证是否成功
+    val errorMessage: String = ""   // 错误信息（失败时）
+): MessageBody {
+    override fun toByteArray(): ByteArray {
+        val msgBytes = errorMessage.toByteArray()
+        val buffer = ByteBuffer.allocate(1 + 2 + msgBytes.size)
+
+        // 写入成功标志（1字节）
+        buffer.put(if (success) 0x01 else 0x00)
+
+        // 写入错误信息长度（2字节，大端序）和数据
+        buffer.putShort(msgBytes.size.toShort())
+        buffer.put(msgBytes)
+
+        return buffer.array()
+    }
+
+    override fun length() = 1 + 2 + errorMessage.toByteArray().size
+
+    companion object {
+        fun fromByteBuffer(buffer: ByteBuffer): AuthenticationResponseMessageBody {
+            // 读取成功标志
+            val success = buffer.get() != 0x00.toByte()
+
+            // 读取错误信息长度
+            val msgLen = buffer.short.toInt() and 0xFFFF
+
+            // 读取错误信息
+            val errorMsg = if (msgLen > 0) {
+                val msgBytes = ByteArray(msgLen)
+                buffer.get(msgBytes)
+                String(msgBytes)
+            } else {
+                ""
+            }
+
+            return AuthenticationResponseMessageBody(success, errorMsg)
+        }
+    }
+}
+
 data class Message<T: MessageBody>(
     val magic: ProtocolMagicEnum,
     val version: Int,
@@ -254,14 +364,28 @@ fun resolveMessage(msg: Message<ByteArrayMessageBody>): Message<out MessageBody>
     ProtocolMagicEnum.PAIR_RESPONSE,
     ProtocolMagicEnum.ECDH,
     ProtocolMagicEnum.ECDH_RESPONSE,
-    ProtocolMagicEnum.AUTHENTICATION,
-    ProtocolMagicEnum.AUTHENTICATION_RESPONSE,
     ProtocolMagicEnum.PLAY,
     ProtocolMagicEnum.PLAY_RESPONSE,
     ProtocolMagicEnum.STOP,
     ProtocolMagicEnum.STOP_RESPONSE,
     ProtocolMagicEnum.ENCRYPTED-> {
         msg
+    }
+    ProtocolMagicEnum.AUTHENTICATION -> {
+        try {
+            msg.transferBody(AuthenticationMessageBody.fromByteBuffer(ByteBuffer.wrap(msg.body.data)))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse AUTHENTICATION message body", e)
+            msg
+        }
+    }
+    ProtocolMagicEnum.AUTHENTICATION_RESPONSE -> {
+        try {
+            msg.transferBody(AuthenticationResponseMessageBody.fromByteBuffer(ByteBuffer.wrap(msg.body.data)))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse AUTHENTICATION_RESPONSE message body", e)
+            msg
+        }
     }
     ProtocolMagicEnum.ERROR -> {
         msg.transferBody(StringMessageBody(String(msg.body.data)))

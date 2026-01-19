@@ -154,9 +154,10 @@ class DeviceConnectionManager @Inject constructor(
                     listeningJobs[deviceId] = newListeningJob
                 }
 
-                // 执行ECDH密钥交换
-                if (device.publicKey != null) {
-                    ecdh(device)
+                // 检查设备是否已配对
+                if (device.config.publicKey.isNotBlank()) {
+                    // 已配对设备：先认证，再进行ECDH
+                    authenticate(device)
                 } else {
                     // 设备未配对
                     updateConnectionState(deviceId, ConnectionState.ERROR)
@@ -191,6 +192,26 @@ class DeviceConnectionManager @Inject constructor(
             Log.e(TAG, "ECDH failed for device: $deviceId", e)
             updateConnectionState(deviceId, ConnectionState.ERROR)
             updateErrorMessage(deviceId, "密钥交换失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 认证已配对的设备
+     */
+    private suspend fun authenticate(device: Device) {
+        val deviceId = getDeviceId(device)
+        try {
+            // 执行认证
+            device.authenticate()
+            Log.d(TAG, "Authentication completed for device: $deviceId")
+
+            // 认证成功后执行ECDH密钥交换
+            ecdh(device)
+        } catch (e: Exception) {
+            Log.e(TAG, "Authentication failed for device: $deviceId", e)
+            updateConnectionState(deviceId, ConnectionState.ERROR)
+            updateErrorMessage(deviceId, "认证失败: ${e.message}")
+            device.disconnect()
         }
     }
 

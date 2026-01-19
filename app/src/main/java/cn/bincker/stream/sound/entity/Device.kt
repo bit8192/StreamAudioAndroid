@@ -203,6 +203,63 @@ class Device(
         }
     }
 
+    /**
+     * 已配对设备的快速认证
+     * 使用存储的公钥进行身份验证，避免重复配对
+     */
+    suspend fun authenticate() {
+        val manager = connectionManager
+            ?: throw IllegalStateException("DeviceConnectionManager is required for authentication")
+
+        withChannel {
+            val msgId = messageIdNum.getAndIncrement()
+            val queueNum = messageQueueNum.getAndIncrement()
+
+            // 生成设备标识（公钥的sha256）
+            val deviceIdentifier = manager.publicKey.encoded.sha256()
+
+            // 生成32字节随机挑战值
+            val randomChallenge = ByteArray(32).apply {
+                java.security.SecureRandom().nextBytes(this)
+            }
+
+            Log.d(TAG, "authenticate: deviceId=${deviceIdentifier.toHexString()}")
+
+            // 构建并发送认证消息
+            writeMessage(
+                queueNum,
+                Message.build(
+                    ProtocolMagicEnum.AUTHENTICATION,
+                    msgId,
+                    AuthenticationMessageBody(deviceIdentifier, randomChallenge)
+                ),
+                manager.privateKey  // 使用私钥签名
+            )
+
+            // 等待认证响应
+            val response = waitResponse<AuthenticationResponseMessageBody>(
+                msgId,
+                ProtocolMagicEnum.AUTHENTICATION_RESPONSE
+            )
+
+            // 检查认证结果
+            if (!response.body.success) {
+                throw Exception("Authentication failed: ${response.body.errorMessage}")
+            }
+
+            // 从配置中加载服务器的公钥
+            publicKey = config.publicKey.let {
+                if (it.isBlank()) {
+                    throw Exception("No server public key stored for authenticated device")
+                } else {
+                    loadPublicEd25519(it)
+                }
+            }
+
+            Log.i(TAG, "authenticate: device [${config.name}] authenticated successfully")
+        }
+    }
+
     suspend fun ecdh() {
         val repository = connectionManager
             ?: throw IllegalStateException("AppConfigRepository is required for ECDH")
@@ -350,10 +407,7 @@ class Device(
 
             // Wait for STOP_RESPONSE
             waitResponse<ByteArrayMessageBody>(msgId, ProtocolMagicEnum.STOP_RESPONSE).let { response ->
-                val decrypted = response.body.decryptAes256gcmToMsg(sessionKey, publicKey)
-                    ?: throw Exception("Failed to decrypt STOP_RESPONSE")
-
-                val body = (decrypted.body as ByteArrayMessageBody).data
+                val body = response.body.data
                 val status = if (body.isNotEmpty()) body[0].toInt() else 0
 
                 Log.i(TAG, "stop: STOP_RESPONSE received - status=$status")
