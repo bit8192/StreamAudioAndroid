@@ -12,6 +12,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
@@ -34,6 +35,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
@@ -41,6 +44,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -50,6 +56,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.bincker.stream.sound.ui.components.DeviceCard
+import cn.bincker.stream.sound.ui.pages.DeviceDetailPage
 import cn.bincker.stream.sound.vm.ConnectionState
 import androidx.core.app.ActivityCompat.requestPermissions
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -85,6 +92,9 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         if(checkSelfPermission(Manifest.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK) != PackageManager.PERMISSION_GRANTED){
             requestPermissions(arrayOf(Manifest.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK), 0)
+        }
+        if(checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED){
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
         }
         if(checkSelfPermission(Manifest.permission.ACCESS_NETWORK_STATE) != PackageManager.PERMISSION_GRANTED){
             requestPermissions(arrayOf(Manifest.permission.ACCESS_NETWORK_STATE), 0)
@@ -130,7 +140,11 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel){
+fun DevicesList(
+    modifier: Modifier = Modifier,
+    vm: DeviceListViewModel,
+    onDeviceClick: (Device) -> Unit,
+){
     val pullToRefreshState = rememberPullToRefreshState()
     val context = LocalContext.current
     val refresh by vm.isRefresh.collectAsState()
@@ -164,17 +178,7 @@ fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel){
                         isPlaying = isPlaying,
                         errorMessage = errorMessage,
                         onCardClick = {
-                            when (connectionState) {
-                                ConnectionState.DISCONNECTED, ConnectionState.ERROR -> {
-                                    vm.connectDevice(device)
-                                }
-                                ConnectionState.CONNECTED -> {
-                                    vm.disconnectDevice(deviceId)
-                                }
-                                ConnectionState.CONNECTING -> {
-                                    // 连接中，不做任何操作
-                                }
-                            }
+                            onDeviceClick(device)
                         },
                         onPlayStopClick = {
                             vm.togglePlayback(deviceId)
@@ -194,6 +198,15 @@ fun DevicesList(modifier: Modifier = Modifier, vm: DeviceListViewModel){
 private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLauncher<ScanOptions>? = null) {
     val snackbarHostState = remember { SnackbarHostState() }
     val errorMessages by vm.errorMessages.collectAsState()
+    var selectedDeviceId by rememberSaveable { mutableStateOf<String?>(null) }
+    val deviceList by vm.deviceList.collectAsState()
+    val selectedDevice = remember(deviceList, selectedDeviceId) {
+        selectedDeviceId?.let { id -> deviceList.firstOrNull { it.config.address == id } }
+    }
+
+    BackHandler(enabled = selectedDeviceId != null) {
+        selectedDeviceId = null
+    }
 
     // 显示错误消息
     LaunchedEffect(errorMessages) {
@@ -209,32 +222,59 @@ private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLaunche
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
+                title = { Text(selectedDevice?.config?.name ?: stringResource(R.string.app_name)) },
+                navigationIcon = {
+                    if (selectedDeviceId != null) {
+                        IconButton(onClick = { selectedDeviceId = null }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "返回",
+                            )
+                        }
+                    }
+                },
                 actions = {
-                    val context = LocalContext.current
-                    val activity = LocalActivity.current
-                    IconButton(onClick = {
-                        if(context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED){
-                            if(activity != null) requestPermissions(activity, arrayOf(Manifest.permission.CAMERA), 0)
+                    if (selectedDeviceId == null) {
+                        val context = LocalContext.current
+                        val activity = LocalActivity.current
+                        IconButton(onClick = {
+                            if(context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED){
+                                if(activity != null) requestPermissions(activity, arrayOf(Manifest.permission.CAMERA), 0)
+                            }
+                            if(context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED){
+                                if(activity != null) requestPermissions(activity, arrayOf(Manifest.permission.READ_MEDIA_IMAGES), 0)
+                            }
+                            Log.d(TAG, "Page: scan btn, barcodeLauncher=$barcodeLauncher")
+                            barcodeLauncher?.launch(ScanOptions().apply {
+                                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                setPrompt("请将二维码置于取景框内扫描")
+                                setBeepEnabled(true)
+                                setOrientationLocked(false)
+                            })
+                        }) {
+                            Icon(painterResource(R.drawable.ic_qr_scan), contentDescription = "扫码")
                         }
-                        if(context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED){
-                            if(activity != null) requestPermissions(activity, arrayOf(Manifest.permission.READ_MEDIA_IMAGES), 0)
-                        }
-                        Log.d(TAG, "Page: scan btn, barcodeLauncher=$barcodeLauncher")
-                        barcodeLauncher?.launch(ScanOptions().apply {
-                            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                            setPrompt("请将二维码置于取景框内扫描")
-                            setBeepEnabled(true)
-                            setOrientationLocked(false)
-                        })
-                    }) {
-                        Icon(painterResource(R.drawable.ic_qr_scan), contentDescription = "扫码")
                     }
                 }
             )
         }
     ) { innerPadding ->
-        DevicesList(modifier = Modifier.padding(innerPadding), vm = vm)
+        if (selectedDeviceId == null) {
+            DevicesList(
+                modifier = Modifier.padding(innerPadding),
+                vm = vm,
+                onDeviceClick = { device ->
+                    selectedDeviceId = device.config.address
+                }
+            )
+        } else {
+            DeviceDetailPage(
+                vm = vm,
+                deviceId = selectedDeviceId!!,
+                onDeviceIdUpdated = { selectedDeviceId = it },
+                modifier = Modifier.padding(innerPadding),
+            )
+        }
     }
 }
 

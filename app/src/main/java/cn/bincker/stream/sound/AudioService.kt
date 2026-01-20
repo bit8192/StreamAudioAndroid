@@ -95,7 +95,8 @@ class AudioService : Service() {
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .build()
 
-        getSystemService<NotificationManager>()?.notify(foregroundNotificationId, notification)
+        // Update the foreground service notification (more reliable than notify-only on some devices/OS versions)
+        startForeground(foregroundNotificationId, notification)
     }
 
     private fun registerNetworkCallback() {

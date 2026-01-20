@@ -41,9 +41,7 @@ class Device(
     companion object {
         const val TAG = "Device"
     }
-    private var connected: Boolean = false
-
-    val isConnected get() = connected
+    private var live: Boolean = false
 
     var publicKey: Ed25519PublicKeyParameters? = config.publicKey.let {
         if (it.isBlank()) null else loadPublicEd25519(it)
@@ -71,15 +69,15 @@ class Device(
     suspend fun connect() {
         withContext(Dispatchers.IO) {
             channel?.let {
-                if (connected){
-                    connected = false
+                if (live){
+                    live = false
                 }
                 if(it.isOpen) it.close()
                 channel = null
             }
             Log.d(TAG, "connect: ${config.address}")
             channel = SocketChannel.open(socketAddress)
-            connected = true
+            live = true
         }
     }
 
@@ -94,7 +92,7 @@ class Device(
         val msf = MutableSharedFlow<Message<out MessageBody>?>(0, 10)
         messageFlow = msf
         try {
-            while (connected && read(buffer) != -1) {
+            while (live && read(buffer) != -1) {
                 buffer.flip()
                 val msg = buffer.getMessage(publicKey)
                 if(msg == null){
@@ -114,13 +112,13 @@ class Device(
             Log.e(TAG, "listening: receive message error", e)
         }finally {
             messageFlow = null
-            if(connected) disconnect()
+            if(live) disconnect()
         }
     }
 
     suspend fun disconnect(){
         withContext(Dispatchers.IO) {
-            connected = false
+            live = false
 
             // Stop UDP receiver if running
             try {
@@ -145,12 +143,13 @@ class Device(
         }
     }
 
-    fun checkConnect(){
-        if (!connected || channel == null || channel?.isOpen != true || channel?.isConnected != true) throw Exception("device [${config.name}] not connected")
-    }
+    val isConnected get() = live && channel != null && channel?.isOpen == true && channel?.isConnected == true
 
     suspend fun withChannel(f: suspend SocketChannel. ()->Unit) {
-        checkConnect()
+        if (!isConnected) {
+            Log.e(TAG, "withChannel: lost connect")
+            return
+        }
         withContext(Dispatchers.IO) {
             f(channel!!)
         }

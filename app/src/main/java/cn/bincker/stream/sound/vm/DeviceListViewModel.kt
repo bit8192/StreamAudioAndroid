@@ -6,6 +6,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.bincker.stream.sound.Application
 import cn.bincker.stream.sound.AudioService
+import cn.bincker.stream.sound.config.AppConfig
+import cn.bincker.stream.sound.config.DeviceConfig
 import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.repository.AppConfigRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -49,6 +51,15 @@ class DeviceListViewModel @Inject constructor(
     // 设备列表 StateFlow - 持久化的StateFlow
     private val _deviceList = MutableStateFlow<List<Device>>(emptyList())
     val deviceList: StateFlow<List<Device>> = _deviceList.asStateFlow()
+
+    private val _appConfig = MutableStateFlow<AppConfig?>(null)
+    val appConfig: StateFlow<AppConfig?> = _appConfig.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            _appConfig.value = appConfigRepository.getAppConfigSnapshot()
+        }
+    }
 
     /**
      * 设置Service Binder
@@ -160,6 +171,48 @@ class DeviceListViewModel @Inject constructor(
     fun addTestDevices() {
         // 仅用于预览，实际运行时设备通过Service管理
         Log.w(TAG, "addTestDevices called - this should only be used in Preview mode")
+    }
+
+    fun refreshAppConfig() {
+        viewModelScope.launch {
+            _appConfig.value = appConfigRepository.getAppConfigSnapshot()
+        }
+    }
+
+    fun saveDeviceConfig(originalAddress: String, newConfig: DeviceConfig) {
+        viewModelScope.launch {
+            val addressChanged = originalAddress != newConfig.address
+            if (addressChanged) {
+                val state = _connectionStates.value[originalAddress]
+                if (state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING) {
+                    serviceBinder?.disconnectDevice(originalAddress)
+                }
+            }
+            appConfigRepository.updateDeviceConfig(originalAddress, newConfig)
+            _appConfig.value = appConfigRepository.getAppConfigSnapshot()
+            serviceBinder?.refreshDeviceList()
+        }
+    }
+
+    fun saveAudioConfig(
+        sampleRate: Int,
+        bits: Int,
+        channels: Int,
+        format: Int,
+        bufferSize: Int,
+        muteOnStreaming: Boolean,
+    ) {
+        viewModelScope.launch {
+            appConfigRepository.updateAudioConfig(
+                sampleRate = sampleRate,
+                bits = bits,
+                channels = channels,
+                format = format,
+                bufferSize = bufferSize,
+                muteOnStreaming = muteOnStreaming,
+            )
+            _appConfig.value = appConfigRepository.getAppConfigSnapshot()
+        }
     }
 
     override fun onCleared() {

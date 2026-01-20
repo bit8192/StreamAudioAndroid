@@ -137,4 +137,39 @@ class AppConfigRepository {
         _deviceConfigList.add(config)
         saveAppConfig()
     }
+
+    suspend fun updateDeviceConfig(oldAddress: String, newConfig: DeviceConfig) {
+        mutex.withLock {
+            val idx = _deviceConfigList.indexOfFirst { it.address == oldAddress }
+            if (idx >= 0) {
+                _deviceConfigList[idx] = newConfig
+            } else {
+                _deviceConfigList.add(newConfig)
+            }
+            saveAppConfig()
+        }
+    }
+
+    suspend fun updateAudioConfig(
+        sampleRate: Int,
+        bits: Int,
+        channels: Int,
+        format: Int,
+        bufferSize: Int,
+        muteOnStreaming: Boolean,
+    ) {
+        mutex.withLock {
+            appConfig.sampleRate = sampleRate
+            appConfig.bits = bits
+            appConfig.channels = channels
+            appConfig.format = format
+            appConfig.bufferSize = bufferSize
+            appConfig.muteOnStreaming = muteOnStreaming
+            saveAppConfig()
+        }
+    }
+
+    suspend fun getAppConfigSnapshot(): AppConfig = mutex.withLock {
+        appConfig.copy(devices = deviceConfigList.toList())
+    }
 }

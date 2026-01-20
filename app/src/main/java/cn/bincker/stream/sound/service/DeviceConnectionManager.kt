@@ -259,6 +259,7 @@ class DeviceConnectionManager @Inject constructor(
         if (device == null) {
             Log.w(TAG, "Device not found: $deviceId")
             updateErrorMessage(deviceId, "设备未连接")
+            updatePlayingState(deviceId, false)
             return
         }
 
@@ -268,10 +269,12 @@ class DeviceConnectionManager @Inject constructor(
         if (_connectionStates.value[deviceId] != ConnectionState.CONNECTED) {
             Log.w(TAG, "Cannot toggle playback, device not connected: $deviceId")
             updateErrorMessage(deviceId, "请先连接设备")
+            updatePlayingState(deviceId, false)
             return
         }
         if (!device.isConnected){
             updateConnectionState(deviceId, ConnectionState.DISCONNECTED)
+            updatePlayingState(deviceId, false)
             return
         }
 
@@ -279,8 +282,9 @@ class DeviceConnectionManager @Inject constructor(
             try {
                 if (isPlaying) {
                     // 停止播放
-                    device.stop()
+                    // 先更新UI状态，避免STOP耗时导致状态长时间不刷新
                     updatePlayingState(deviceId, false)
+                    device.stop()
                     Log.d(TAG, "Stopped playback for device: $deviceId")
                 } else {
                     // 开始播放 - 使用默认端口9999
@@ -297,6 +301,10 @@ class DeviceConnectionManager @Inject constructor(
                     updatePlayingState(deviceId, false)
                     updateErrorMessage(deviceId, "设备已断开连接")
                 } else {
+                    // 如果STOP失败，恢复播放状态（避免UI被错误地置为停止）
+                    if (isPlaying) {
+                        updatePlayingState(deviceId, true)
+                    }
                     updateErrorMessage(deviceId, "操作失败: ${e.message}")
                 }
             }

@@ -102,10 +102,7 @@ fun DeviceCard(
         modifier = modifier
             .fillMaxWidth()
             .scale(if (isPlaying) pulseScale else 1f)
-            .clickable(
-                enabled = connectionState != ConnectionState.CONNECTING,
-                onClick = onCardClick
-            ),
+            .clickable(onClick = onCardClick),
         colors = CardDefaults.elevatedCardColors(
             containerColor = cardColor
         ),
