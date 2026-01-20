@@ -178,6 +178,10 @@ class DeviceConnectionManager @Inject constructor(
         mutex.withLock {
             connectionJobs[deviceId] = job
         }
+
+        if (device.config.autoPlay){
+            togglePlayback(deviceId, scope)
+        }
     }
 
     private suspend fun ecdh(

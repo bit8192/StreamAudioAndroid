@@ -5,6 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Binder
 import android.util.Log
 import androidx.core.content.getSystemService
@@ -22,6 +26,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import javax.inject.Inject
 
 
@@ -48,6 +53,89 @@ class AudioService : Service() {
     lateinit var deviceConnectionManager: DeviceConnectionManager
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val notificationId = "stream_audio_notification_channel"
+    private val foregroundNotificationId = 1
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        registerNetworkCallback()
+        observePlayingStates()
+    }
+
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(
+            notificationId,
+            "音频流服务",
+            NotificationManager.IMPORTANCE_LOW
+        )
+        getSystemService<NotificationManager>()!!.createNotificationChannel(channel)
+    }
+
+    private fun observePlayingStates() {
+        scope.launch {
+            deviceConnectionManager.playingStates.collect { states ->
+                updateNotification(states)
+            }
+        }
+    }
+
+    private fun updateNotification(playingStates: Map<String, Boolean>) {
+        val playingCount = playingStates.values.count { it }
+        val contentText = if (playingCount > 0) {
+            "正在播放 ($playingCount 个设备)"
+        } else {
+            "待机中"
+        }
+
+        val notification = Notification.Builder(this, notificationId)
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText(contentText)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .build()
+
+        getSystemService<NotificationManager>()?.notify(foregroundNotificationId, notification)
+    }
+
+    private fun registerNetworkCallback() {
+        val connectivityManager = getSystemService<ConnectivityManager>() ?: return
+
+        networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val capabilities = connectivityManager.getNetworkCapabilities(network)
+                if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
+                    Log.d(TAG, "WIFI connected, auto-connecting devices")
+                    autoConnectDevice()
+                }
+            }
+        }
+
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .build()
+
+        connectivityManager.registerNetworkCallback(request, networkCallback!!)
+    }
+
+    private fun autoConnectDevice() {
+        scope.launch {
+            deviceConnectionManager.deviceList.value.forEach { device ->
+                // Only auto-connect devices with autoPlay enabled
+                if (!device.config.autoPlay) {
+                    Log.d(TAG, "Skipping device ${device.config.name} - autoPlay disabled")
+                    return@forEach
+                }
+
+                val deviceId = deviceConnectionManager.getDeviceId(device)
+                val state = deviceConnectionManager.connectionStates.value[deviceId]
+                if (state == ConnectionState.DISCONNECTED) {
+                    Log.d(TAG, "Auto-connecting device: ${device.config.name}")
+                    deviceConnectionManager.connectDevice(device, scope)
+                }
+            }
+        }
+    }
 
     inner class AudioServiceBinder: Binder() {
         // 获取连接管理器的状态流
@@ -108,10 +196,13 @@ class AudioService : Service() {
     override fun onBind(intent: Intent) = AudioServiceBinder()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notificationId = "stream_audio_notification_channel"
-        val channel = NotificationChannel(notificationId, "stream audio notification channel", NotificationManager.IMPORTANCE_LOW)
-        getSystemService<NotificationManager>()!!.createNotificationChannel(channel)
-        startForeground(1, Notification.Builder(this, notificationId).setContentTitle(getString(R.string.app_name)).setContentText("playing...").setSmallIcon(R.drawable.ic_launcher_foreground).build())
+        // Start as foreground service
+        val notification = Notification.Builder(this, notificationId)
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText("启动中...")
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .build()
+        startForeground(foregroundNotificationId, notification)
 
         // 初始化设备列表
         scope.launch {
@@ -141,7 +232,7 @@ class AudioService : Service() {
                 Log.e(TAG, "onStartCommand: execute action error", e)
             }
         }
-        return super.onStartCommand(intent, flags, startId)
+        return START_STICKY // 服务被杀死后自动重启
     }
 
     private suspend fun pair(uri: String){
@@ -176,6 +267,12 @@ class AudioService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+
+        // Unregister network callback
+        networkCallback?.let {
+            getSystemService<ConnectivityManager>()?.unregisterNetworkCallback(it)
+        }
+
         scope.launch {
             deviceConnectionManager.cleanup()
         }
