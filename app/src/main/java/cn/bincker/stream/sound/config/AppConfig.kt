@@ -8,5 +8,6 @@ data class AppConfig(
     var bits: Int = 16,
     var channels: Int = 2,
     var format: Int = 1,
-    var bufferSize: Int = 4096
+    var bufferSize: Int = 4096,
+    var muteOnStreaming: Boolean = false
 )
