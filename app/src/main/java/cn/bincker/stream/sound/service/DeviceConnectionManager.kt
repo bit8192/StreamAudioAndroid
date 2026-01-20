@@ -266,6 +266,10 @@ class DeviceConnectionManager @Inject constructor(
             updateErrorMessage(deviceId, "请先连接设备")
             return
         }
+        if (!device.isConnected){
+            updateConnectionState(deviceId, ConnectionState.DISCONNECTED)
+            return
+        }
 
         scope.launch(Dispatchers.IO) {
             try {
@@ -282,7 +286,15 @@ class DeviceConnectionManager @Inject constructor(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to toggle playback for device: $deviceId", e)
-                updateErrorMessage(deviceId, "操作失败: ${e.message}")
+
+                // Check if device is disconnected
+                if (e.message?.contains("not connected") == true) {
+                    updateConnectionState(deviceId, ConnectionState.DISCONNECTED)
+                    updatePlayingState(deviceId, false)
+                    updateErrorMessage(deviceId, "设备已断开连接")
+                } else {
+                    updateErrorMessage(deviceId, "操作失败: ${e.message}")
+                }
             }
         }
     }

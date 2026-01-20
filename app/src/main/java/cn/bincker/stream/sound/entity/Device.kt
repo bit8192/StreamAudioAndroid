@@ -135,6 +135,13 @@ class Device(
                 channel = null
             }
             Log.d(TAG, "disconnect: device [${config.name}] disconnected")
+
+            // Notify connection manager about disconnection
+            connectionManager?.let {
+                CoroutineScope(Dispatchers.Main).launch {
+                    it.disconnectDevice(config.address)
+                }
+            }
         }
     }
 
