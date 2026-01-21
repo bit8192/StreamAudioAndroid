@@ -3,6 +3,7 @@ package cn.bincker.stream.sound.service
 import android.util.Log
 import cn.bincker.stream.sound.config.AudioEncryptionMethod
 import cn.bincker.stream.sound.config.DeviceConfig
+import cn.bincker.stream.sound.entity.AudioInfo
 import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.repository.AppConfigRepository
 import cn.bincker.stream.sound.vm.ConnectionState
@@ -42,6 +43,10 @@ class DeviceConnectionManager @Inject constructor(
     // 播放状态管理
     private val _playingStates = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val playingStates: StateFlow<Map<String, Boolean>> = _playingStates.asStateFlow()
+
+    // 音频信息（由服务端决定，客户端只展示）
+    private val _audioInfos = MutableStateFlow<Map<String, AudioInfo>>(emptyMap())
+    val audioInfos: StateFlow<Map<String, AudioInfo>> = _audioInfos.asStateFlow()
 
     // 错误消息管理
     private val _errorMessages = MutableStateFlow<Map<String, String?>>(emptyMap())
@@ -264,6 +269,9 @@ class DeviceConnectionManager @Inject constructor(
         // 更新状态
         updateConnectionState(deviceId, ConnectionState.DISCONNECTED)
         updatePlayingState(deviceId, false)
+        _audioInfos.value = _audioInfos.value.toMutableMap().apply {
+            remove(deviceId)
+        }
     }
 
     /**
@@ -303,8 +311,10 @@ class DeviceConnectionManager @Inject constructor(
                     device.stop()
                     Log.d(TAG, "Stopped playback for device: $deviceId")
                 } else {
-                    // 开始播放 - 使用默认端口9999
-                    device.play(9999)
+                    val info = device.play()
+                    _audioInfos.value = _audioInfos.value.toMutableMap().apply {
+                        this[deviceId] = info
+                    }
                     updatePlayingState(deviceId, true)
                     Log.d(TAG, "Started playback for device: $deviceId")
                 }
@@ -390,6 +400,7 @@ class DeviceConnectionManager @Inject constructor(
         // 重置状态
         _connectionStates.value = emptyMap()
         _playingStates.value = emptyMap()
+        _audioInfos.value = emptyMap()
         _errorMessages.value = emptyMap()
     }
 }

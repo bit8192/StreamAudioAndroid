@@ -15,6 +15,8 @@ import android.util.Log
 import androidx.core.content.getSystemService
 import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.entity.PairDevice
+import cn.bincker.stream.sound.entity.AudioInfo
+import cn.bincker.stream.sound.entity.PlaybackStats
 import cn.bincker.stream.sound.repository.AppConfigRepository
 import cn.bincker.stream.sound.service.DeviceConnectionManager
 import cn.bincker.stream.sound.vm.ConnectionState
@@ -62,6 +64,7 @@ class AudioService : Service() {
     private val notificationId = "stream_audio_notification_channel"
     private val foregroundNotificationId = 1
     private val notificationTick = MutableStateFlow(0L)
+    private val playbackStats = MutableStateFlow<Map<String, PlaybackStats>>(emptyMap())
 
     override fun onCreate() {
         super.onCreate()
@@ -141,6 +144,17 @@ class AudioService : Service() {
             while (true) {
                 delay(1000)
                 notificationTick.value = SystemClock.elapsedRealtime()
+
+                val activeDevices = deviceConnectionManager.getActiveDevicesSnapshot()
+                val playing = deviceConnectionManager.playingStates.value
+                playbackStats.value = playing.mapNotNull { (deviceId, isPlaying) ->
+                    if (!isPlaying) return@mapNotNull null
+                    val device = activeDevices[deviceId] ?: return@mapNotNull null
+                    deviceId to PlaybackStats(
+                        udpPort = device.getCurrentUdpPort(),
+                        endToEndLatencyMs = device.getEndToEndLatencyMs().takeIf { it >= 0 },
+                    )
+                }.toMap()
             }
         }
     }
@@ -203,6 +217,12 @@ class AudioService : Service() {
 
         fun getErrorMessages(): StateFlow<Map<String, String?>> =
             deviceConnectionManager.errorMessages
+
+        fun getAudioInfos(): StateFlow<Map<String, AudioInfo>> =
+            deviceConnectionManager.audioInfos
+
+        fun getPlaybackStats(): StateFlow<Map<String, PlaybackStats>> =
+            playbackStats
 
         // 获取设备列表 StateFlow
         fun getDeviceList(): StateFlow<List<Device>> = deviceConnectionManager.deviceList

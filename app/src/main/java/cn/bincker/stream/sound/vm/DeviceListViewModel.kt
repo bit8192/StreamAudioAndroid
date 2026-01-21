@@ -8,6 +8,8 @@ import cn.bincker.stream.sound.Application
 import cn.bincker.stream.sound.AudioService
 import cn.bincker.stream.sound.config.AppConfig
 import cn.bincker.stream.sound.config.DeviceConfig
+import cn.bincker.stream.sound.entity.AudioInfo
+import cn.bincker.stream.sound.entity.PlaybackStats
 import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.repository.AppConfigRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -51,6 +53,12 @@ class DeviceListViewModel @Inject constructor(
     // 设备列表 StateFlow - 持久化的StateFlow
     private val _deviceList = MutableStateFlow<List<Device>>(emptyList())
     val deviceList: StateFlow<List<Device>> = _deviceList.asStateFlow()
+
+    private val _audioInfos = MutableStateFlow<Map<String, AudioInfo>>(emptyMap())
+    val audioInfos: StateFlow<Map<String, AudioInfo>> = _audioInfos.asStateFlow()
+
+    private val _playbackStats = MutableStateFlow<Map<String, PlaybackStats>>(emptyMap())
+    val playbackStats: StateFlow<Map<String, PlaybackStats>> = _playbackStats.asStateFlow()
 
     private val _appConfig = MutableStateFlow<AppConfig?>(null)
     val appConfig: StateFlow<AppConfig?> = _appConfig.asStateFlow()
@@ -106,6 +114,23 @@ class DeviceListViewModel @Inject constructor(
                     binder.getDeviceList().collect { devices ->
                         _deviceList.value = devices
                         Log.d(TAG, "Device list updated from service: ${devices.size} devices")
+                    }
+                }
+            )
+
+            // 收集音频参数（服务端决定）
+            serviceFlowJobs.add(
+                viewModelScope.launch {
+                    binder.getAudioInfos().collect { infos ->
+                        _audioInfos.value = infos
+                    }
+                }
+            )
+
+            serviceFlowJobs.add(
+                viewModelScope.launch {
+                    binder.getPlaybackStats().collect { stats ->
+                        _playbackStats.value = stats
                     }
                 }
             )
@@ -191,27 +216,6 @@ class DeviceListViewModel @Inject constructor(
             appConfigRepository.updateDeviceConfig(originalAddress, newConfig)
             _appConfig.value = appConfigRepository.getAppConfigSnapshot()
             serviceBinder?.refreshDeviceList()
-        }
-    }
-
-    fun saveAudioConfig(
-        sampleRate: Int,
-        bits: Int,
-        channels: Int,
-        format: Int,
-        bufferSize: Int,
-        muteOnStreaming: Boolean,
-    ) {
-        viewModelScope.launch {
-            appConfigRepository.updateAudioConfig(
-                sampleRate = sampleRate,
-                bits = bits,
-                channels = channels,
-                format = format,
-                bufferSize = bufferSize,
-                muteOnStreaming = muteOnStreaming,
-            )
-            _appConfig.value = appConfigRepository.getAppConfigSnapshot()
         }
     }
 

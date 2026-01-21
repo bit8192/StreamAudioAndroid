@@ -150,25 +150,6 @@ class AppConfigRepository {
         }
     }
 
-    suspend fun updateAudioConfig(
-        sampleRate: Int,
-        bits: Int,
-        channels: Int,
-        format: Int,
-        bufferSize: Int,
-        muteOnStreaming: Boolean,
-    ) {
-        mutex.withLock {
-            appConfig.sampleRate = sampleRate
-            appConfig.bits = bits
-            appConfig.channels = channels
-            appConfig.format = format
-            appConfig.bufferSize = bufferSize
-            appConfig.muteOnStreaming = muteOnStreaming
-            saveAppConfig()
-        }
-    }
-
     suspend fun getAppConfigSnapshot(): AppConfig = mutex.withLock {
         appConfig.copy(devices = deviceConfigList.toList())
     }

@@ -25,6 +25,7 @@ import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import org.bouncycastle.math.ec.rfc7748.X25519
+import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.net.SocketAddress
 import java.nio.ByteBuffer
@@ -68,12 +69,17 @@ class Device(
     @Volatile
     private var lastSyncRttNs: Long = -1L
 
+    @Volatile
+    private var lastAudioInfo: AudioInfo? = null
+
     val socketAddress get(): SocketAddress {
         val parts = config.address.split(":")
         val host = parts[0]
         val port = if (parts.size > 1) parts[1].toInt() else 12345
         return InetSocketAddress(host, port)
     }
+
+    var playUdpPort: Int = 0
 
     suspend fun withRetry(times: Int, f: suspend ()->Unit) {
         var attempt = 0
@@ -151,6 +157,7 @@ class Device(
             try {
                 udpAudioReceiver?.stop()
                 udpAudioReceiver = null
+                playUdpPort = 0
             } catch (e: Exception) {
                 Log.e(TAG, "disconnect: Failed to stop UDP receiver", e)
             }
@@ -172,12 +179,9 @@ class Device(
 
     val isConnected get() = live && channel != null && channel?.isOpen == true && channel?.isConnected == true
 
-    suspend fun withChannel(f: suspend SocketChannel. ()->Unit) {
-        if (!isConnected) {
-            Log.e(TAG, "withChannel: lost connect")
-            return
-        }
-        withContext(Dispatchers.IO) {
+    suspend fun <T> withChannel(f: suspend SocketChannel. ()->T): T {
+        if (!isConnected) throw Exception("withChannel: lost connect")
+        return withContext(Dispatchers.IO) {
             f(channel!!)
         }
     }
@@ -405,17 +409,20 @@ class Device(
         }
     }
 
-    suspend fun play(udpPort: Int = 8888) {
+    suspend fun play(): AudioInfo {
         val repository = connectionManager
             ?: throw IllegalStateException("AppConfigRepository is required for play")
 
         // Sync clock before starting UDP stream, so we can compute end-to-end latency
         syncClock()
 
-        withChannel {
+        return withChannel {
             if (!ecdhCompleted) {
                 throw Exception("ECDH not completed, cannot play")
             }
+
+            val reservedSocket = DatagramSocket()
+            playUdpPort = reservedSocket.localPort
 
             val msgId = messageIdNum.getAndIncrement()
             val queueNum = messageQueueNum.getAndIncrement()
@@ -425,7 +432,7 @@ class Device(
 
             // Build PLAY request with client UDP port
             val bodyBytes = ByteBuffer.allocate(3).apply {
-                putShort(udpPort.toShort())
+                putShort(playUdpPort.toShort())
                 put(config.audioEncryption.wireValue.toByte())
             }.array()
 
@@ -444,57 +451,72 @@ class Device(
             )
 
             // Wait for PLAY_RESPONSE
-            waitResponse<ByteArrayMessageBody>(msgId, ProtocolMagicEnum.PLAY_RESPONSE).let { msg ->
-                val body = msg.body.data
-                val buffer = ByteBuffer.wrap(body)
+            val msg = waitResponse<ByteArrayMessageBody>(msgId, ProtocolMagicEnum.PLAY_RESPONSE)
+            val body = msg.body.data
+            val buffer = ByteBuffer.wrap(body)
 
-                val serverUdpPort = buffer.getShort().toInt() and 0xFFFF
-                val sampleRate = buffer.getInt()
-                val bits = buffer.getShort().toInt() and 0xFFFF
-                val channels = buffer.getShort().toInt() and 0xFFFF
-                val format = buffer.getShort().toInt() and 0xFFFF
-                val encryptionMethod = if (buffer.remaining() >= 1) {
-                    AudioEncryptionMethod.fromWire(buffer.get().toInt() and 0xFF)
-                } else {
-                    config.audioEncryption
-                }
-
-                Log.i(TAG, "play: PLAY_RESPONSE received - port=$serverUdpPort, sr=$sampleRate, bits=$bits, ch=$channels, fmt=$format, enc=$encryptionMethod")
-                Log.d(TAG, "play: device [${config.name}] play started, udpKey=${udpAudioKey.toHexString()}")
-
-                if (encryptionMethod != config.audioEncryption) {
-                    config.audioEncryption = encryptionMethod
-                    connectionManager.updateDeviceAudioEncryption(config.address, encryptionMethod)
-                }
-
-                // Start UDP receiver with udpAudioKey
-                try {
-                    val serverAddress = channel!!.remoteAddress as InetSocketAddress
-                    udpAudioReceiver = UdpAudioReceiver(
-                        serverAddress = serverAddress.address,
-                        clientPort = udpPort,
-                        udpAudioKey = udpAudioKey,
-                        audioEncryption = encryptionMethod,
-                        sampleRate = sampleRate,
-                        bits = bits,
-                        channels = channels,
-                        format = format,
-                        serverToClientOffsetNs = serverToClientOffsetNs,
-                        lastSyncRttNs = lastSyncRttNs,
-                    )
-
-                    // Use the context from the current coroutine scope
-                    val receiverScope = CoroutineScope(Dispatchers.IO)
-                    udpAudioReceiver?.start(receiverScope)
-
-                    Log.i(TAG, "play: UDP audio receiver started on port $udpPort")
-
-                } catch (e: Exception) {
-                    Log.e(TAG, "play: Failed to start UDP receiver", e)
-                    udpAudioReceiver = null
-                    throw e
-                }
+            val serverUdpPort = buffer.getShort().toInt() and 0xFFFF
+            val sampleRate = buffer.getInt()
+            val bits = buffer.getShort().toInt() and 0xFFFF
+            val channels = buffer.getShort().toInt() and 0xFFFF
+            val format = buffer.getShort().toInt() and 0xFFFF
+            val encryptionMethod = if (buffer.remaining() >= 1) {
+                AudioEncryptionMethod.fromWire(buffer.get().toInt() and 0xFF)
+            } else {
+                config.audioEncryption
             }
+
+            val audioInfo = AudioInfo(
+                sampleRate = sampleRate,
+                bits = bits,
+                channels = channels,
+                format = format,
+            )
+            lastAudioInfo = audioInfo
+
+            Log.i(TAG, "play: PLAY_RESPONSE received - port=$serverUdpPort, sr=$sampleRate, bits=$bits, ch=$channels, fmt=$format, enc=$encryptionMethod")
+            Log.d(TAG, "play: device [${config.name}] play started, udpKey=${udpAudioKey.toHexString()}")
+
+            if (encryptionMethod != config.audioEncryption) {
+                config.audioEncryption = encryptionMethod
+                connectionManager.updateDeviceAudioEncryption(config.address, encryptionMethod)
+            }
+
+            // Start UDP receiver with udpAudioKey
+            try {
+                val serverAddress = channel!!.remoteAddress as InetSocketAddress
+                udpAudioReceiver = UdpAudioReceiver(
+                    serverAddress = serverAddress.address,
+                    clientPort = playUdpPort,
+                    preboundSocket = reservedSocket,
+                    udpAudioKey = udpAudioKey,
+                    audioEncryption = encryptionMethod,
+                    sampleRate = sampleRate,
+                    bits = bits,
+                    channels = channels,
+                    format = format,
+                    serverToClientOffsetNs = serverToClientOffsetNs,
+                    lastSyncRttNs = lastSyncRttNs,
+                )
+
+                // Use the context from the current coroutine scope
+                val receiverScope = CoroutineScope(Dispatchers.IO)
+                udpAudioReceiver?.start(receiverScope)
+
+                Log.i(TAG, "play: UDP audio receiver started on port $playUdpPort")
+
+            } catch (e: Exception) {
+                Log.e(TAG, "play: Failed to start UDP receiver", e)
+                try {
+                    reservedSocket.close()
+                } catch (_: Exception) {
+                }
+                udpAudioReceiver = null
+                playUdpPort = 0
+                throw e
+            }
+
+            audioInfo
         }
     }
 
@@ -533,6 +555,7 @@ class Device(
                 try {
                     udpAudioReceiver?.stop()
                     udpAudioReceiver = null
+                    playUdpPort = 0
                     Log.i(TAG, "stop: UDP audio receiver stopped")
                 } catch (e: Exception) {
                     Log.e(TAG, "stop: Failed to stop UDP receiver", e)
@@ -544,4 +567,8 @@ class Device(
     fun getEndToEndLatencyMs(): Long {
         return udpAudioReceiver?.getEndToEndLatencyMs() ?: -1L
     }
+
+    fun getLastAudioInfo(): AudioInfo? = lastAudioInfo
+
+    fun getCurrentUdpPort(): Int? = playUdpPort.takeIf { it > 0 }
 }

@@ -24,6 +24,7 @@ import kotlin.math.min
 class UdpAudioReceiver(
     private val serverAddress: InetAddress,
     private val clientPort: Int,
+    preboundSocket: DatagramSocket? = null,
     private val udpAudioKey: ByteArray,
     private val audioEncryption: AudioEncryptionMethod,
     private val sampleRate: Int,
@@ -78,6 +79,10 @@ class UdpAudioReceiver(
         return if (v >= 0) v / 1_000_000L else -1L
     }
 
+    init {
+        datagramSocket = preboundSocket
+    }
+
     suspend fun start(scope: CoroutineScope) {
         withContext(Dispatchers.IO) {
             if (isReceiving.get()) {
@@ -86,8 +91,10 @@ class UdpAudioReceiver(
             }
 
             try {
-                // Create UDP socket
-                datagramSocket = DatagramSocket(clientPort)
+                // Create UDP socket (or reuse pre-bound one)
+                if (datagramSocket == null) {
+                    datagramSocket = DatagramSocket(clientPort)
+                }
 
                 // Setup AudioTrack
                 setupAudioTrack()

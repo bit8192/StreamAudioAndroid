@@ -12,7 +12,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -47,11 +50,13 @@ fun DeviceDetailPage(
     val deviceList by vm.deviceList.collectAsState()
     val connectionStates by vm.connectionStates.collectAsState()
     val playingStates by vm.playingStates.collectAsState()
-    val appConfig by vm.appConfig.collectAsState()
+    val audioInfos by vm.audioInfos.collectAsState()
+    val playbackStats by vm.playbackStats.collectAsState()
 
     val device = remember(deviceList, deviceId) { deviceList.firstOrNull { it.config.address == deviceId } }
     val connectionState = connectionStates[deviceId] ?: ConnectionState.DISCONNECTED
     val isPlaying = playingStates[deviceId] ?: false
+    val stats = playbackStats[deviceId]
 
     var initialized by rememberSaveable(deviceId) { mutableStateOf(false) }
 
@@ -62,19 +67,12 @@ fun DeviceDetailPage(
     var autoConnect by rememberSaveable(deviceId) { mutableStateOf(true) }
     var audioEncryption by rememberSaveable(deviceId) { mutableStateOf(AudioEncryptionMethod.XOR_256) }
 
-    var sampleRate by rememberSaveable { mutableStateOf("") }
-    var bits by rememberSaveable { mutableStateOf("") }
-    var channels by rememberSaveable { mutableStateOf("") }
-    var format by rememberSaveable { mutableStateOf("") }
-    var bufferSize by rememberSaveable { mutableStateOf("") }
-    var muteOnStreaming by rememberSaveable { mutableStateOf(false) }
-
     LaunchedEffect(deviceId) {
         vm.refreshAppConfig()
     }
 
-    LaunchedEffect(device, appConfig) {
-        if (device != null && appConfig != null && !initialized) {
+    LaunchedEffect(device) {
+        if (device != null && !initialized) {
             initialized = true
 
             name = device.config.name
@@ -84,13 +82,6 @@ fun DeviceDetailPage(
             publicKey = device.config.publicKey
             autoConnect = device.config.autoPlay
             audioEncryption = device.config.audioEncryption
-
-            sampleRate = appConfig!!.sampleRate.toString()
-            bits = appConfig!!.bits.toString()
-            channels = appConfig!!.channels.toString()
-            format = appConfig!!.format.toString()
-            bufferSize = appConfig!!.bufferSize.toString()
-            muteOnStreaming = appConfig!!.muteOnStreaming
         }
     }
 
@@ -105,7 +96,44 @@ fun DeviceDetailPage(
             return
         }
 
-        Text("连接状态: $connectionState")
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(name.ifBlank { "未命名设备" }, style = MaterialTheme.typography.titleLarge)
+                Text(device.config.address, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                HorizontalDivider()
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("连接: $connectionState")
+                    Text(if (isPlaying) "播放中" else "未播放")
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("UDP 端口")
+                    Text(stats?.udpPort?.toString() ?: "-", style = MaterialTheme.typography.titleMedium)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("端到端延迟")
+                    Text(stats?.endToEndLatencyMs?.let { "${it}ms" } ?: "-", style = MaterialTheme.typography.titleMedium)
+                }
+            }
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -142,6 +170,42 @@ fun DeviceDetailPage(
                 modifier = Modifier.weight(1f),
             ) {
                 Text(if (isPlaying) "停止播放" else "开始播放")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text("音频参数 (服务端)", style = MaterialTheme.typography.titleMedium)
+                val info = audioInfos[deviceId]
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("采样率")
+                    Text(info?.sampleRate?.toString() ?: "-")
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("位深")
+                    Text(info?.bits?.toString() ?: "-")
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("声道数")
+                    Text(info?.channels?.toString() ?: "-")
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("格式(format)")
+                    Text(info?.format?.toString() ?: "-")
+                }
+                Text(
+                    "说明: 音频参数由服务端决定，客户端仅展示。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
 
@@ -193,7 +257,7 @@ fun DeviceDetailPage(
 
         Text("音频流加密方式", style = MaterialTheme.typography.titleSmall)
 
-        AudioEncryptionMethod.values().forEach { method ->
+        AudioEncryptionMethod.entries.forEach { method ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -204,60 +268,6 @@ fun DeviceDetailPage(
                 )
                 Text(method.label)
             }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text("音频参数 (全局)", style = MaterialTheme.typography.titleMedium)
-
-        OutlinedTextField(
-            value = sampleRate,
-            onValueChange = { sampleRate = it },
-            label = { Text("采样率") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        )
-        OutlinedTextField(
-            value = bits,
-            onValueChange = { bits = it },
-            label = { Text("位深") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        )
-        OutlinedTextField(
-            value = channels,
-            onValueChange = { channels = it },
-            label = { Text("声道数") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        )
-        OutlinedTextField(
-            value = format,
-            onValueChange = { format = it },
-            label = { Text("格式 (format)") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        )
-        OutlinedTextField(
-            value = bufferSize,
-            onValueChange = { bufferSize = it },
-            label = { Text("缓冲区大小") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text("流式播放时静音")
-            Switch(checked = muteOnStreaming, onCheckedChange = { muteOnStreaming = it })
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -275,17 +285,6 @@ fun DeviceDetailPage(
                     return@Button
                 }
 
-                val sampleRateInt = sampleRate.toIntOrNull()
-                val bitsInt = bits.toIntOrNull()
-                val channelsInt = channels.toIntOrNull()
-                val formatInt = format.toIntOrNull()
-                val bufferSizeInt = bufferSize.toIntOrNull()
-
-                if (sampleRateInt == null || bitsInt == null || channelsInt == null || formatInt == null || bufferSizeInt == null) {
-                    Toast.makeText(context, "音频参数格式不正确", Toast.LENGTH_SHORT).show()
-                    return@Button
-                }
-
                 val newAddress = "${ip.trim()}:${portInt}"
                 val newDeviceConfig = DeviceConfig(
                     name = name.trim(),
@@ -296,14 +295,6 @@ fun DeviceDetailPage(
                 )
 
                 vm.saveDeviceConfig(deviceId, newDeviceConfig)
-                vm.saveAudioConfig(
-                    sampleRate = sampleRateInt,
-                    bits = bitsInt,
-                    channels = channelsInt,
-                    format = formatInt,
-                    bufferSize = bufferSizeInt,
-                    muteOnStreaming = muteOnStreaming,
-                )
 
                 if (newAddress != deviceId) {
                     onDeviceIdUpdated(newAddress)
