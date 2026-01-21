@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
-import java.nio.ByteBuffer
+import android.media.AudioTimestamp
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.min
@@ -29,7 +29,9 @@ class UdpAudioReceiver(
     private val sampleRate: Int,
     private val bits: Int,
     private val channels: Int,
-    private val format: Int
+    private val format: Int,
+    serverToClientOffsetNs: Long = 0L,
+    lastSyncRttNs: Long = -1L,
 ) {
     companion object {
         private const val TAG = "UdpAudioReceiver"
@@ -47,12 +49,34 @@ class UdpAudioReceiver(
     private val isPlaying = AtomicBoolean(false)
 
     // Audio data queue (thread-safe)
-    private val audioQueue = mutableListOf<ByteArray>()
+    private data class AudioPacket(
+        val data: ByteArray,
+        val captureTimeClientNs: Long,
+    )
+
+    private val audioQueue = mutableListOf<AudioPacket>()
     private val queueLock = Any()
 
     // Sequence tracking
     private val expectedSequence = AtomicLong(0)
     private var lastPacketTime = 0L
+
+    private val serverToClientOffsetNs = AtomicLong(serverToClientOffsetNs)
+    private val lastSyncRttNs = AtomicLong(lastSyncRttNs)
+    private val endToEndLatencyNs = AtomicLong(-1L)
+
+    fun setServerToClientOffsetNs(offsetNs: Long) {
+        serverToClientOffsetNs.set(offsetNs)
+    }
+
+    fun setLastSyncRttNs(rttNs: Long) {
+        lastSyncRttNs.set(rttNs)
+    }
+
+    fun getEndToEndLatencyMs(): Long {
+        val v = endToEndLatencyNs.get()
+        return if (v >= 0) v / 1_000_000L else -1L
+    }
 
     suspend fun start(scope: CoroutineScope) {
         withContext(Dispatchers.IO) {
@@ -177,7 +201,8 @@ class UdpAudioReceiver(
     }
 
     private fun processPacket(data: ByteArray, length: Int) {
-        if (length < 4) {
+        // Packet: [seq(4)] + [capture_time_ns(8)] + [encrypted_audio]
+        if (length < 12) {
             Log.w(TAG, "Packet too short: $length bytes")
             return
         }
@@ -188,6 +213,17 @@ class UdpAudioReceiver(
                                ((data[1].toInt() and 0xFF) shl 16) or
                                ((data[2].toInt() and 0xFF) shl 8) or
                                (data[3].toInt() and 0xFF)
+
+            // Parse capture timestamp (big-endian uint64)
+            var captureTimeServerNs = 0L
+            for (i in 0 until 8) {
+                captureTimeServerNs = (captureTimeServerNs shl 8) or (data[4 + i].toLong() and 0xFFL)
+            }
+            val captureTimeClientNs = if (lastSyncRttNs.get() >= 0) {
+                captureTimeServerNs + serverToClientOffsetNs.get()
+            } else {
+                0L
+            }
 
             // Check sequence ordering
             val expected = expectedSequence.get()
@@ -205,12 +241,12 @@ class UdpAudioReceiver(
             }
 
             // Decrypt audio data
-            val encryptedAudio = data.copyOfRange(4, length)
+            val encryptedAudio = data.copyOfRange(12, length)
             val decryptedAudio = decryptAudioData(encryptedAudio, sequenceNumber)
 
             // Add to audio queue
             synchronized(queueLock) {
-                audioQueue.add(decryptedAudio)
+                audioQueue.add(AudioPacket(decryptedAudio, captureTimeClientNs))
 
                 // Limit queue size to prevent memory overflow
                 while (audioQueue.size > 50) {
@@ -257,6 +293,11 @@ class UdpAudioReceiver(
 
     private suspend fun playbackLoop() {
         val audioTrack = this.audioTrack ?: return
+        val bytesPerFrame = channels * (bits / 8)
+        if (bytesPerFrame <= 0) return
+
+        var framesWrittenTotal = 0L
+        val timestamp = AudioTimestamp()
 
         try {
             audioTrack.play()
@@ -265,7 +306,7 @@ class UdpAudioReceiver(
             var isInSilence = false
 
             while (isPlaying.get()) {
-                val audioData: ByteArray? = synchronized(queueLock) {
+                val packet: AudioPacket? = synchronized(queueLock) {
                     if (audioQueue.isNotEmpty()) {
                         audioQueue.removeFirstOrNull()
                     } else {
@@ -273,7 +314,10 @@ class UdpAudioReceiver(
                     }
                 }
 
-                if (audioData != null) {
+                if (packet != null) {
+                    val audioData = packet.data
+                    val captureTimeClientNs = packet.captureTimeClientNs
+
                     // Check for silence (to prevent system muting after 60s of silence)
                     val isSilent = audioData.all { it.toInt() == 0 }
 
@@ -284,17 +328,37 @@ class UdpAudioReceiver(
                         } else if (System.currentTimeMillis() - silenceStart > 5000) {
                             // Skip silence after 5 seconds to prevent system muting
                             kotlinx.coroutines.delay(10)
-                            continue
                         }
+                        continue
                     } else {
                         isInSilence = false
                     }
 
                     // Write audio data to track
+                    val firstFrameIndex = framesWrittenTotal
                     val bytesWritten = audioTrack.write(audioData, 0, audioData.size, AudioTrack.WRITE_NON_BLOCKING)
 
                     if (bytesWritten < 0) {
                         Log.w(TAG, "AudioTrack write failed: $bytesWritten")
+                        continue
+                    }
+
+                    val framesWritten = bytesWritten / bytesPerFrame
+                    framesWrittenTotal += framesWritten
+
+                    // Estimate play time for the first frame of this packet, then compute end-to-end latency.
+                    if (captureTimeClientNs != 0L && framesWritten > 0) {
+                        val hasTs = audioTrack.getTimestamp(timestamp)
+                        if (hasTs) {
+                            val frameDelta = firstFrameIndex - timestamp.framePosition
+                            if (frameDelta >= 0) {
+                                val playTimeNs = timestamp.nanoTime + (frameDelta * 1_000_000_000L) / sampleRate
+                                val latencyNs = playTimeNs - captureTimeClientNs
+                                if (latencyNs >= 0) {
+                                    endToEndLatencyNs.set(latencyNs)
+                                }
+                            }
+                        }
                     }
                 } else {
                     // No audio data available, wait briefly
@@ -341,6 +405,9 @@ class UdpAudioReceiver(
             -1
         }
 
-        return "Queue: $queueSize, LastPacket: ${timeSinceLastPacket}ms ago, Expected: ${expectedSequence.get()}"
+        val e2eLatencyMs = getEndToEndLatencyMs()
+        val rttMs = lastSyncRttNs.get().let { if (it >= 0) it / 1_000_000L else -1L }
+
+        return "Queue: $queueSize, LastPacket: ${timeSinceLastPacket}ms ago, Expected: ${expectedSequence.get()}, E2E: ${e2eLatencyMs}ms, RTT: ${rttMs}ms"
     }
 }

@@ -306,7 +306,9 @@ data class Message<T: MessageBody>(
         body = ByteArrayMessageBody.buildAes256gcmEncryptedBody(toByteBuffer(queueNum, signKey).array(), encryptKey),
         sign = ByteArray(0),
         crc = 0
-    )
+    ).also {
+        Log.d(TAG, "toAes256gcmEncryptedMessage: $this")
+    }
 
     fun verifySign(verifySignKey: Ed25519PublicKeyParameters): Boolean = dataSectionToByteBuffer(queueNum).verifySign(verifySignKey)
 
@@ -314,11 +316,11 @@ data class Message<T: MessageBody>(
 }
 
 fun SocketChannel.writeMessage(queueNum: Int, message: Message<*>, key: Ed25519PrivateKeyParameters) {
-    Log.d(TAG, "writeMessage: $message")
+    if(message.magic != ProtocolMagicEnum.ENCRYPTED) Log.d(TAG, "writeMessage: $message")
     message.toByteBuffer(queueNum, key).let {
         it.flip()
         write(it)
-        Log.d(TAG, "writeMessage: ${it.array().toHexString(0, it.limit())}")
+        if(message.magic != ProtocolMagicEnum.ENCRYPTED) Log.d(TAG, "writeMessage: ${it.array().toHexString(0, it.limit())}")
     }
 }
 
@@ -333,7 +335,8 @@ fun ByteBuffer.getMessage(verifySignKey: Ed25519PublicKeyParameters? = null): Me
     val queueNum = getInt()
     val id = getInt()
     val length = getInt()
-    if (remaining() < length + Short.SIZE_BYTES) {
+    // Need full body + signature + crc, otherwise treat as incomplete and don't consume bytes.
+    if (remaining() < length + Ed25519.SIGNATURE_SIZE + Short.SIZE_BYTES) {
         reset()
         return null
     }
@@ -368,6 +371,8 @@ fun resolveMessage(msg: Message<ByteArrayMessageBody>): Message<out MessageBody>
     ProtocolMagicEnum.PLAY_RESPONSE,
     ProtocolMagicEnum.STOP,
     ProtocolMagicEnum.STOP_RESPONSE,
+    ProtocolMagicEnum.SYNC,
+    ProtocolMagicEnum.SYNC_RESPONSE,
     ProtocolMagicEnum.ENCRYPTED-> {
         msg
     }

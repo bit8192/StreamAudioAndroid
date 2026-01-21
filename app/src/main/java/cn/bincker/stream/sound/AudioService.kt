@@ -10,6 +10,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Binder
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.getSystemService
 import cn.bincker.stream.sound.entity.Device
@@ -23,6 +24,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -56,12 +61,14 @@ class AudioService : Service() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val notificationId = "stream_audio_notification_channel"
     private val foregroundNotificationId = 1
+    private val notificationTick = MutableStateFlow(0L)
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         registerNetworkCallback()
-        observePlayingStates()
+        observeServiceStates()
+        startNotificationTicker()
     }
 
     private fun createNotificationChannel() {
@@ -73,22 +80,72 @@ class AudioService : Service() {
         getSystemService<NotificationManager>()!!.createNotificationChannel(channel)
     }
 
-    private fun observePlayingStates() {
+    private fun observeServiceStates() {
         scope.launch {
-            deviceConnectionManager.playingStates.collect { states ->
-                updateNotification(states)
+            combine(
+                deviceConnectionManager.playingStates,
+                deviceConnectionManager.connectionStates,
+                deviceConnectionManager.errorMessages,
+                notificationTick,
+            ) { playingStates, connectionStates, errorMessages, _ ->
+                val activeDevices = deviceConnectionManager.getActiveDevicesSnapshot()
+                buildNotificationText(
+                    playingStates,
+                    connectionStates,
+                    errorMessages,
+                    activeDevices
+                )
+            }.distinctUntilChanged().collect { contentText ->
+                updateNotification(contentText)
             }
         }
     }
 
-    private fun updateNotification(playingStates: Map<String, Boolean>) {
+    private fun buildNotificationText(
+        playingStates: Map<String, Boolean>,
+        connectionStates: Map<String, ConnectionState>,
+        errorMessages: Map<String, String?>,
+        activeDevices: Map<String, Device>,
+    ): String {
         val playingCount = playingStates.values.count { it }
-        val contentText = if (playingCount > 0) {
-            "正在播放 ($playingCount 个设备)"
+        val connectingCount = connectionStates.values.count { it == ConnectionState.CONNECTING }
+        val connectedCount = connectionStates.values.count { it == ConnectionState.CONNECTED }
+        val errorCount = errorMessages.values.count { !it.isNullOrBlank() }
+
+        val latencyText = if (playingCount > 0) {
+            val latencies = playingStates.mapNotNull { (deviceId, isPlaying) ->
+                if (!isPlaying) return@mapNotNull null
+                activeDevices[deviceId]?.getEndToEndLatencyMs()?.takeIf { it >= 0 }
+            }
+            if (latencies.isNotEmpty()) {
+                val avg = latencies.sum() / latencies.size
+                "，延迟 ${avg}ms"
+            } else {
+                ""
+            }
         } else {
-            "待机中"
+            ""
         }
 
+        return when {
+            playingCount > 0 -> "正在播放 ($playingCount 个设备)${latencyText}"
+            errorCount > 0 -> "有错误 ($errorCount 个设备)"
+            connectingCount > 0 -> "连接中 ($connectingCount 个设备)"
+            connectedCount > 0 -> "已连接 ($connectedCount 个设备)"
+            else -> "待机中"
+        }
+    }
+
+    private fun startNotificationTicker() {
+        scope.launch {
+            while (true) {
+                delay(1000)
+                notificationTick.value = SystemClock.elapsedRealtime()
+            }
+        }
+    }
+
+    private fun updateNotification(contentText: String) {
         val notification = Notification.Builder(this, notificationId)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(contentText)
@@ -119,21 +176,19 @@ class AudioService : Service() {
         connectivityManager.registerNetworkCallback(request, networkCallback!!)
     }
 
-    private fun autoConnectDevice() {
-        scope.launch {
-            deviceConnectionManager.deviceList.value.forEach { device ->
-                // Only auto-connect devices with autoPlay enabled
-                if (!device.config.autoPlay) {
-                    Log.d(TAG, "Skipping device ${device.config.name} - autoPlay disabled")
-                    return@forEach
-                }
+    private fun autoConnectDevice() = scope.launch {
+        deviceConnectionManager.deviceList.value.forEach { device ->
+            // Only auto-connect devices with autoPlay enabled
+            if (!device.config.autoPlay) {
+                Log.d(TAG, "Skipping device ${device.config.name} - autoPlay disabled")
+                return@forEach
+            }
 
-                val deviceId = deviceConnectionManager.getDeviceId(device)
-                val state = deviceConnectionManager.connectionStates.value[deviceId]
-                if (state == ConnectionState.DISCONNECTED) {
-                    Log.d(TAG, "Auto-connecting device: ${device.config.name}")
-                    deviceConnectionManager.connectDevice(device, scope)
-                }
+            val deviceId = deviceConnectionManager.getDeviceId(device)
+            val state = deviceConnectionManager.connectionStates.value[deviceId]
+            if (state == null || state == ConnectionState.DISCONNECTED) {
+                Log.d(TAG, "Auto-connecting device: ${device.config.name}")
+                deviceConnectionManager.connectDevice(device, scope)
             }
         }
     }
@@ -156,6 +211,7 @@ class AudioService : Service() {
         fun refreshDeviceList() {
             scope.launch {
                 deviceConnectionManager.refreshDeviceList()
+                autoConnectDevice().join()
             }
         }
 
@@ -198,12 +254,21 @@ class AudioService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Start as foreground service
-        val notification = Notification.Builder(this, notificationId)
-            .setContentTitle(getString(R.string.app_name))
-            .setContentText("启动中...")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .build()
-        startForeground(foregroundNotificationId, notification)
+        startForeground(
+            foregroundNotificationId,
+            Notification.Builder(this, notificationId)
+                .setContentTitle(getString(R.string.app_name))
+                .setContentText(
+                    buildNotificationText(
+                        deviceConnectionManager.playingStates.value,
+                        deviceConnectionManager.connectionStates.value,
+                        deviceConnectionManager.errorMessages.value,
+                        emptyMap(),
+                    )
+                )
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .build()
+        )
 
         // 初始化设备列表
         scope.launch {

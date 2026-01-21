@@ -124,6 +124,10 @@ class DeviceConnectionManager @Inject constructor(
 
     fun getDeviceId(device: Device) = device.config.address
 
+    suspend fun getActiveDevicesSnapshot(): Map<String, Device> {
+        return mutex.withLock { activeDevices.toMap() }
+    }
+
     /**
      * 连接设备
      */
@@ -175,6 +179,13 @@ class DeviceConnectionManager @Inject constructor(
                     updateConnectionState(deviceId, ConnectionState.ERROR)
                     updateErrorMessage(deviceId, "设备未配对，请先扫描二维码配对")
                 }
+
+                // 认证成功后执行ECDH密钥交换
+                ecdh(device)
+
+                if (device.config.autoPlay){
+                    togglePlayback(deviceId, scope)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to connect to device: $deviceId", e)
                 updateConnectionState(deviceId, ConnectionState.ERROR)
@@ -189,10 +200,6 @@ class DeviceConnectionManager @Inject constructor(
 
         mutex.withLock {
             connectionJobs[deviceId] = job
-        }
-
-        if (device.config.autoPlay){
-            togglePlayback(deviceId, scope)
         }
     }
 
@@ -220,9 +227,6 @@ class DeviceConnectionManager @Inject constructor(
             // 执行认证
             device.authenticate()
             Log.d(TAG, "Authentication completed for device: $deviceId")
-
-            // 认证成功后执行ECDH密钥交换
-            ecdh(device)
         } catch (e: Exception) {
             Log.e(TAG, "Authentication failed for device: $deviceId", e)
             updateConnectionState(deviceId, ConnectionState.ERROR)

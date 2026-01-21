@@ -28,6 +28,7 @@ import org.bouncycastle.math.ec.rfc7748.X25519
 import java.net.InetSocketAddress
 import java.net.SocketAddress
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.channels.SocketChannel
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
@@ -37,7 +38,7 @@ class Device(
     val connectionManager: DeviceConnectionManager?,
     val config: DeviceConfig,
     var channel: SocketChannel? = null,
-    val msgWaitTimeout: Long = 5000,
+    val msgWaitTimeout: Long = 10000,
 ) {
     companion object {
         const val TAG = "Device"
@@ -59,6 +60,12 @@ class Device(
 
     // UDP Audio Receiver
     private var udpAudioReceiver: UdpAudioReceiver? = null
+
+    @Volatile
+    private var serverToClientOffsetNs: Long = 0L
+
+    @Volatile
+    private var lastSyncRttNs: Long = -1L
 
     val socketAddress get(): SocketAddress {
         val parts = config.address.split(":")
@@ -313,9 +320,78 @@ class Device(
         return hMacSha256(tcpSessionKey, salt + info)
     }
 
+    private suspend fun syncClock(samples: Int = 3) {
+        val repository = connectionManager ?: return
+        if (!ecdhCompleted) return
+
+        try {
+            withChannel {
+                var bestRtt = Long.MAX_VALUE
+                var bestOffset = 0L
+
+                repeat(samples.coerceAtLeast(1)) {
+                    val msgId = messageIdNum.getAndIncrement()
+                    val queueNum = messageQueueNum.getAndIncrement()
+
+                    val t0 = System.nanoTime()
+                    val bodyBytes = ByteBuffer.allocate(Long.SIZE_BYTES)
+                        .order(ByteOrder.BIG_ENDIAN)
+                        .putLong(t0)
+                        .array()
+
+                    writeMessage(
+                        queueNum,
+                        Message.build(
+                            ProtocolMagicEnum.SYNC,
+                            msgId,
+                            ByteArrayMessageBody(bodyBytes)
+                        ).toAes256gcmEncryptedMessage(
+                            queueNum,
+                            repository.privateKey,
+                            sessionKey
+                        ),
+                        repository.privateKey
+                    )
+
+                    val response = waitResponse<ByteArrayMessageBody>(msgId, ProtocolMagicEnum.SYNC_RESPONSE)
+                    val t3 = System.nanoTime()
+
+                    val buf = ByteBuffer.wrap(response.body.data).order(ByteOrder.BIG_ENDIAN)
+                    if (buf.remaining() < 24) return@repeat
+                    val t0Echo = buf.long
+                    val t1 = buf.long
+                    val t2 = buf.long
+                    if (t0Echo != t0) return@repeat
+
+                    // delta = server - client (NTP-like)
+                    val deltaServerMinusClient = ((t1 - t0) + (t2 - t3)) / 2
+                    val offsetServerToClient = -deltaServerMinusClient
+                    val rtt = (t3 - t0) - (t2 - t1)
+
+                    if (rtt in 0 until bestRtt) {
+                        bestRtt = rtt
+                        bestOffset = offsetServerToClient
+                    }
+                }
+
+                if (bestRtt != Long.MAX_VALUE) {
+                    serverToClientOffsetNs = bestOffset
+                    lastSyncRttNs = bestRtt
+                    udpAudioReceiver?.setServerToClientOffsetNs(bestOffset)
+                    udpAudioReceiver?.setLastSyncRttNs(bestRtt)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "syncClock: failed for device [${config.name}]", e)
+        }
+    }
+
     suspend fun play(udpPort: Int = 8888) {
         val repository = connectionManager
             ?: throw IllegalStateException("AppConfigRepository is required for play")
+
+        // Sync clock before starting UDP stream, so we can compute end-to-end latency
+        syncClock()
 
         withChannel {
             if (!ecdhCompleted) {
@@ -383,7 +459,9 @@ class Device(
                         sampleRate = sampleRate,
                         bits = bits,
                         channels = channels,
-                        format = format
+                        format = format,
+                        serverToClientOffsetNs = serverToClientOffsetNs,
+                        lastSyncRttNs = lastSyncRttNs,
                     )
 
                     // Use the context from the current coroutine scope
@@ -442,5 +520,9 @@ class Device(
                 }
             }
         }
+    }
+
+    fun getEndToEndLatencyMs(): Long {
+        return udpAudioReceiver?.getEndToEndLatencyMs() ?: -1L
     }
 }
