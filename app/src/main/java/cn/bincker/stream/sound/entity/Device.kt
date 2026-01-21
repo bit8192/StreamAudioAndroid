@@ -34,6 +34,7 @@ import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
 import cn.bincker.stream.sound.utils.toHexString
 
+const val CONNECT_RETRY_TIMES = 3
 class Device(
     val connectionManager: DeviceConnectionManager?,
     val config: DeviceConfig,
@@ -74,6 +75,22 @@ class Device(
         return InetSocketAddress(host, port)
     }
 
+    suspend fun withRetry(times: Int, f: suspend ()->Unit) {
+        var attempt = 0
+        var lastException: Exception? = null
+        while (attempt < times) {
+            try {
+                f()
+                return
+            } catch (e: Exception) {
+                lastException = e
+                Log.w(TAG, "withRetry: attempt ${attempt + 1} failed for device [${config.name}]", e)
+                attempt++
+            }
+        }
+        throw lastException ?: Exception("Unknown error in withRetry")
+    }
+
     suspend fun connect() {
         withContext(Dispatchers.IO) {
             channel?.let {
@@ -84,7 +101,9 @@ class Device(
                 channel = null
             }
             Log.d(TAG, "connect: ${config.address}")
-            channel = SocketChannel.open(socketAddress)
+            withRetry(CONNECT_RETRY_TIMES) {
+                channel = SocketChannel.open(socketAddress)
+            }
             live = true
         }
     }
