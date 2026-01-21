@@ -1,6 +1,7 @@
 package cn.bincker.stream.sound.service
 
 import android.util.Log
+import cn.bincker.stream.sound.config.AudioEncryptionMethod
 import cn.bincker.stream.sound.config.DeviceConfig
 import cn.bincker.stream.sound.entity.Device
 import cn.bincker.stream.sound.repository.AppConfigRepository
@@ -108,6 +109,17 @@ class DeviceConnectionManager @Inject constructor(
     suspend fun refreshDeviceList() {
         appConfigRepository.refresh()
         initializeDeviceList()
+    }
+
+    suspend fun updateDeviceAudioEncryption(address: String, method: AudioEncryptionMethod) {
+        mutex.withLock {
+            val device = _deviceList.value.firstOrNull { it.config.address == address }
+            if (device != null) {
+                device.config.audioEncryption = method
+                appConfigRepository.updateDeviceConfig(address, device.config)
+                appConfigRepository.saveAppConfig()
+            }
+        }
     }
 
     fun getDeviceId(device: Device) = device.config.address

@@ -124,9 +124,32 @@ fun aes256gcmEncrypt(plainText: ByteArray, key: ByteArray, iv: ByteArray): ByteA
 }
 
 /**
+ * 使用 AES-128-GCM 加密数据
+ */
+fun aes128gcmEncrypt(plainText: ByteArray, key: ByteArray, iv: ByteArray): ByteArray {
+    Log.d(TAG, "aes128gcmEncrypt: plainText=${plainText.toHexString()}\tkey=${key.toHexString()}\tiv=${iv.toHexString()}")
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    val keySpec = SecretKeySpec(key, "AES")
+    val gcmSpec = GCMParameterSpec(128, iv)
+    cipher.init(Cipher.ENCRYPT_MODE, keySpec, gcmSpec)
+    return cipher.doFinal(plainText)
+}
+
+/**
  * 使用 AES-256-GCM 解密数据
  */
 fun aes256gcmDecrypt(cipherText: ByteArray, key: ByteArray, iv: ByteArray): ByteArray {
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    val keySpec = SecretKeySpec(key, "AES")
+    val gcmSpec = GCMParameterSpec(128, iv)
+    cipher.init(Cipher.DECRYPT_MODE, keySpec, gcmSpec)
+    return cipher.doFinal(cipherText)
+}
+
+/**
+ * 使用 AES-128-GCM 解密数据
+ */
+fun aes128gcmDecrypt(cipherText: ByteArray, key: ByteArray, iv: ByteArray): ByteArray {
     val cipher = Cipher.getInstance("AES/GCM/NoPadding")
     val keySpec = SecretKeySpec(key, "AES")
     val gcmSpec = GCMParameterSpec(128, iv)

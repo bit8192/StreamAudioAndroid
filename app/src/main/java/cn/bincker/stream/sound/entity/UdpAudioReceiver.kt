@@ -5,7 +5,9 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.util.Log
-import cn.bincker.stream.sound.utils.hMacSha256
+import cn.bincker.stream.sound.config.AudioEncryptionMethod
+import cn.bincker.stream.sound.utils.aes128gcmDecrypt
+import cn.bincker.stream.sound.utils.aes256gcmDecrypt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,6 +25,7 @@ class UdpAudioReceiver(
     private val serverAddress: InetAddress,
     private val clientPort: Int,
     private val udpAudioKey: ByteArray,
+    private val audioEncryption: AudioEncryptionMethod,
     private val sampleRate: Int,
     private val bits: Int,
     private val channels: Int,
@@ -203,7 +206,7 @@ class UdpAudioReceiver(
 
             // Decrypt audio data
             val encryptedAudio = data.copyOfRange(4, length)
-            val decryptedAudio = decryptAudioData(encryptedAudio)
+            val decryptedAudio = decryptAudioData(encryptedAudio, sequenceNumber)
 
             // Add to audio queue
             synchronized(queueLock) {
@@ -220,13 +223,36 @@ class UdpAudioReceiver(
         }
     }
 
-    private fun decryptAudioData(encryptedData: ByteArray): ByteArray {
-        // Simple XOR decryption (matching C++ implementation)
-        val decrypted = encryptedData.clone()
-        for (i in decrypted.indices) {
-            decrypted[i] = (decrypted[i].toInt() xor udpAudioKey[i % udpAudioKey.size].toInt()).toByte()
+    private fun buildUdpAudioIv(sequenceNumber: Int): ByteArray {
+        val iv = ByteArray(12)
+        iv[0] = (sequenceNumber shr 24).toByte()
+        iv[1] = (sequenceNumber shr 16).toByte()
+        iv[2] = (sequenceNumber shr 8).toByte()
+        iv[3] = sequenceNumber.toByte()
+        System.arraycopy(udpAudioKey, 0, iv, 4, 8)
+        return iv
+    }
+
+    private fun decryptAudioData(encryptedData: ByteArray, sequenceNumber: Int): ByteArray {
+        return when (audioEncryption) {
+            AudioEncryptionMethod.NONE -> encryptedData
+            AudioEncryptionMethod.XOR_256 -> {
+                val decrypted = encryptedData.clone()
+                for (i in decrypted.indices) {
+                    decrypted[i] = (decrypted[i].toInt() xor udpAudioKey[i % udpAudioKey.size].toInt()).toByte()
+                }
+                decrypted
+            }
+            AudioEncryptionMethod.AES128GCM -> {
+                val iv = buildUdpAudioIv(sequenceNumber)
+                val key = udpAudioKey.copyOfRange(0, 16)
+                aes128gcmDecrypt(encryptedData, key, iv)
+            }
+            AudioEncryptionMethod.AES256GCM -> {
+                val iv = buildUdpAudioIv(sequenceNumber)
+                aes256gcmDecrypt(encryptedData, udpAudioKey, iv)
+            }
         }
-        return decrypted
     }
 
     private suspend fun playbackLoop() {

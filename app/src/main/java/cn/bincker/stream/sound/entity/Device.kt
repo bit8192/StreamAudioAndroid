@@ -4,6 +4,7 @@ import android.util.Log
 import cn.bincker.stream.sound.ProtocolMagicEnum
 import cn.bincker.stream.sound.ProtocolMagicEnum.ECDH
 import cn.bincker.stream.sound.ProtocolMagicEnum.ECDH_RESPONSE
+import cn.bincker.stream.sound.config.AudioEncryptionMethod
 import cn.bincker.stream.sound.config.DeviceConfig
 import cn.bincker.stream.sound.service.DeviceConnectionManager
 import cn.bincker.stream.sound.utils.hMacSha256
@@ -328,8 +329,9 @@ class Device(
             val udpAudioKey = deriveUdpAudioKey(sessionKey)
 
             // Build PLAY request with client UDP port
-            val bodyBytes = ByteBuffer.allocate(2).apply {
+            val bodyBytes = ByteBuffer.allocate(3).apply {
                 putShort(udpPort.toShort())
+                put(config.audioEncryption.wireValue.toByte())
             }.array()
 
             writeMessage(
@@ -356,9 +358,19 @@ class Device(
                 val bits = buffer.getShort().toInt() and 0xFFFF
                 val channels = buffer.getShort().toInt() and 0xFFFF
                 val format = buffer.getShort().toInt() and 0xFFFF
+                val encryptionMethod = if (buffer.remaining() >= 1) {
+                    AudioEncryptionMethod.fromWire(buffer.get().toInt() and 0xFF)
+                } else {
+                    config.audioEncryption
+                }
 
-                Log.i(TAG, "play: PLAY_RESPONSE received - port=$serverUdpPort, sr=$sampleRate, bits=$bits, ch=$channels, fmt=$format")
+                Log.i(TAG, "play: PLAY_RESPONSE received - port=$serverUdpPort, sr=$sampleRate, bits=$bits, ch=$channels, fmt=$format, enc=$encryptionMethod")
                 Log.d(TAG, "play: device [${config.name}] play started, udpKey=${udpAudioKey.toHexString()}")
+
+                if (encryptionMethod != config.audioEncryption) {
+                    config.audioEncryption = encryptionMethod
+                    connectionManager.updateDeviceAudioEncryption(config.address, encryptionMethod)
+                }
 
                 // Start UDP receiver with udpAudioKey
                 try {
@@ -367,6 +379,7 @@ class Device(
                         serverAddress = serverAddress.address,
                         clientPort = udpPort,
                         udpAudioKey = udpAudioKey,
+                        audioEncryption = encryptionMethod,
                         sampleRate = sampleRate,
                         bits = bits,
                         channels = channels,

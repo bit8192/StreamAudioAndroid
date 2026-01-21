@@ -15,6 +15,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -30,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import cn.bincker.stream.sound.config.AudioEncryptionMethod
 import cn.bincker.stream.sound.config.DeviceConfig
 import cn.bincker.stream.sound.vm.ConnectionState
 import cn.bincker.stream.sound.vm.DeviceListViewModel
@@ -58,6 +60,7 @@ fun DeviceDetailPage(
     var port by rememberSaveable(deviceId) { mutableStateOf("") }
     var publicKey by rememberSaveable(deviceId) { mutableStateOf("") }
     var autoConnect by rememberSaveable(deviceId) { mutableStateOf(true) }
+    var audioEncryption by rememberSaveable(deviceId) { mutableStateOf(AudioEncryptionMethod.XOR_256) }
 
     var sampleRate by rememberSaveable { mutableStateOf("") }
     var bits by rememberSaveable { mutableStateOf("") }
@@ -80,6 +83,7 @@ fun DeviceDetailPage(
             port = parts.getOrNull(1) ?: "12345"
             publicKey = device.config.publicKey
             autoConnect = device.config.autoPlay
+            audioEncryption = device.config.audioEncryption
 
             sampleRate = appConfig!!.sampleRate.toString()
             bits = appConfig!!.bits.toString()
@@ -187,6 +191,21 @@ fun DeviceDetailPage(
             Switch(checked = autoConnect, onCheckedChange = { autoConnect = it })
         }
 
+        Text("音频流加密方式", style = MaterialTheme.typography.titleSmall)
+
+        AudioEncryptionMethod.values().forEach { method ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(
+                    selected = audioEncryption == method,
+                    onClick = { audioEncryption = method },
+                )
+                Text(method.label)
+            }
+        }
+
         Spacer(modifier = Modifier.height(8.dp))
 
         Text("音频参数 (全局)", style = MaterialTheme.typography.titleMedium)
@@ -273,6 +292,7 @@ fun DeviceDetailPage(
                     address = newAddress,
                     publicKey = publicKey.trim(),
                     autoPlay = autoConnect,
+                    audioEncryption = audioEncryption,
                 )
 
                 vm.saveDeviceConfig(deviceId, newDeviceConfig)

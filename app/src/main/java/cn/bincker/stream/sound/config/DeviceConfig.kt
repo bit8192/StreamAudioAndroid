@@ -4,5 +4,6 @@ data class DeviceConfig(
     var name: String = "",
     var address: String = "",
     var publicKey: String = "",
-    var autoPlay: Boolean = true
+    var autoPlay: Boolean = true,
+    var audioEncryption: AudioEncryptionMethod = AudioEncryptionMethod.AES128GCM
 )
