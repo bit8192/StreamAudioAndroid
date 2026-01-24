@@ -121,37 +121,38 @@ class Device(
     }
 
     suspend fun listening() = withChannel {
-        val buffer = ByteBuffer.allocate(2048)
+        val buffer = ByteBuffer.allocate(8192)
         val msf = MutableSharedFlow<Message<out MessageBody>?>(0, 10)
         messageFlow = msf
         try {
-            while (live && read(buffer) != -1) {
+            while (live) {
+                if (read(buffer) == -1) break
                 buffer.flip()
-                val msg = buffer.getMessage(publicKey)
-                if(msg == null){
-                    Log.d(TAG, "listening: incomplete msg data=${buffer.array().copyOfRange(buffer.position(), buffer.position() + buffer.limit()).toHexString()}")
-                    buffer.compact()
-                    continue
-                }
-                when(msg.magic){
-                    ProtocolMagicEnum.PAIR -> {
-                        //TODO 作为服务端
+                while (true) {
+                    val msg = buffer.getMessage(publicKey) ?: break
+                    when (msg.magic) {
+                        ProtocolMagicEnum.PAIR -> {
+                            // TODO 作为服务端
+                        }
+                        else -> msf.emit(msg)
                     }
-                    else -> msf.emit(msg)
+                }
+                if (buffer.hasRemaining()) {
+                    Log.d(TAG, "listening: incomplete msg data=${buffer.array().copyOfRange(buffer.position(), buffer.limit()).toHexString()}")
                 }
                 buffer.compact()
             }
-        }catch (e: Exception){
+        } catch (e: Exception) {
             Log.e(TAG, "listening: receive message error", e)
-        }finally {
-            messageFlow = null
-            if(live) disconnect()
         }
+        messageFlow = null
+        disconnect()
     }
 
     suspend fun disconnect(){
         withContext(Dispatchers.IO) {
             live = false
+            messageFlow = null
 
             // Stop UDP receiver if running
             try {

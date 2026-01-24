@@ -331,6 +331,7 @@ fun ByteBuffer.getMessage(verifySignKey: Ed25519PublicKeyParameters? = null): Me
         reset()
         return null
     }
+    Log.d(TAG, "getMessage: match magic $magic")
     val version = getInt()
     val queueNum = getInt()
     val id = getInt()

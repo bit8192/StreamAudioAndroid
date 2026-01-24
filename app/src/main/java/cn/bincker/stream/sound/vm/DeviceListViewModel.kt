@@ -146,14 +146,13 @@ class DeviceListViewModel @Inject constructor(
 
         viewModelScope.launch {
             _isRefresh.value = true
-            try {
+            runCatching {
                 // 委托给Service刷新设备列表
                 serviceBinder?.refreshDeviceList()
                     ?: Log.w(TAG, "Cannot refresh device list: Service not bound")
                 Log.d(TAG, "devices size: ${_deviceList.value.size}")
-            } finally {
-                _isRefresh.value = false
             }
+            _isRefresh.value = false
         }
     }
 

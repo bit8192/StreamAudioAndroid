@@ -10,6 +10,7 @@ import cn.bincker.stream.sound.vm.ConnectionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -63,6 +64,8 @@ class DeviceConnectionManager @Inject constructor(
 
     // 线程安全锁
     private val mutex = Mutex()
+
+    private val manualDisconnects = mutableSetOf<String>()
 
     val publicKey get() = appConfigRepository.publicKey
 
@@ -140,6 +143,7 @@ class DeviceConnectionManager @Inject constructor(
         val deviceId = getDeviceId(device)
 
         mutex.withLock {
+            manualDisconnects.remove(deviceId)
             // 如果已经在连接中，则不重复连接
             if (_connectionStates.value[deviceId] == ConnectionState.CONNECTING) {
                 Log.d(TAG, "Device $deviceId is already connecting")
@@ -243,8 +247,11 @@ class DeviceConnectionManager @Inject constructor(
     /**
      * 断开设备连接
      */
-    suspend fun disconnectDevice(deviceId: String) {
+    suspend fun disconnectDevice(deviceId: String, manual: Boolean = false) {
         mutex.withLock {
+            if (manual) {
+                manualDisconnects.add(deviceId)
+            }
             // 取消连接和监听任务
             connectionJobs[deviceId]?.cancel()
             listeningJobs[deviceId]?.cancel()
@@ -272,6 +279,10 @@ class DeviceConnectionManager @Inject constructor(
         _audioInfos.value = _audioInfos.value.toMutableMap().apply {
             remove(deviceId)
         }
+    }
+
+    suspend fun isManualDisconnect(deviceId: String): Boolean {
+        return mutex.withLock { manualDisconnects.contains(deviceId) }
     }
 
     /**

@@ -10,6 +10,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Binder
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.getSystemService
@@ -65,12 +66,17 @@ class AudioService : Service() {
     private val foregroundNotificationId = 1
     private val notificationTick = MutableStateFlow(0L)
     private val playbackStats = MutableStateFlow<Map<String, PlaybackStats>>(emptyMap())
+    @Volatile
+    private var isWifiConnected = false
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        createWakeLock()
         registerNetworkCallback()
         observeServiceStates()
+        observeReconnects()
         startNotificationTicker()
     }
 
@@ -83,6 +89,16 @@ class AudioService : Service() {
         getSystemService<NotificationManager>()!!.createNotificationChannel(channel)
     }
 
+    private fun createWakeLock() {
+        val powerManager = getSystemService<PowerManager>() ?: return
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "StreamAudio:AudioService"
+        ).apply {
+            setReferenceCounted(false)
+        }
+    }
+
     private fun observeServiceStates() {
         scope.launch {
             combine(
@@ -91,6 +107,7 @@ class AudioService : Service() {
                 deviceConnectionManager.errorMessages,
                 notificationTick,
             ) { playingStates, connectionStates, errorMessages, _ ->
+                updateWakeLock(playingStates, connectionStates)
                 val activeDevices = deviceConnectionManager.getActiveDevicesSnapshot()
                 buildNotificationText(
                     playingStates,
@@ -101,6 +118,24 @@ class AudioService : Service() {
             }.distinctUntilChanged().collect { contentText ->
                 updateNotification(contentText)
             }
+        }
+    }
+
+    private fun updateWakeLock(
+        playingStates: Map<String, Boolean>,
+        connectionStates: Map<String, ConnectionState>,
+    ) {
+        val shouldHold = playingStates.values.any { it } ||
+            connectionStates.values.any { it == ConnectionState.CONNECTING || it == ConnectionState.CONNECTED }
+        val lock = wakeLock ?: return
+        if (shouldHold) {
+            if (!lock.isHeld) {
+                Log.d(TAG, "updateWakeLock: ==================================================================== acquire")
+                lock.acquire()
+            }
+        } else if (lock.isHeld) {
+            Log.d(TAG, "updateWakeLock: ==================================================================== release")
+            lock.release()
         }
     }
 
@@ -172,14 +207,21 @@ class AudioService : Service() {
 
     private fun registerNetworkCallback() {
         val connectivityManager = getSystemService<ConnectivityManager>() ?: return
+        isWifiConnected = connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
 
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 val capabilities = connectivityManager.getNetworkCapabilities(network)
                 if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
+                    isWifiConnected = true
                     Log.d(TAG, "WIFI connected, auto-connecting devices")
                     autoConnectDevice()
                 }
+            }
+
+            override fun onLost(network: Network) {
+                isWifiConnected = false
             }
         }
 
@@ -203,6 +245,35 @@ class AudioService : Service() {
             if (state == null || state == ConnectionState.DISCONNECTED) {
                 Log.d(TAG, "Auto-connecting device: ${device.config.name}")
                 deviceConnectionManager.connectDevice(device, scope)
+            }
+        }
+    }
+
+    private fun observeReconnects() {
+        scope.launch {
+            var lastStates: Map<String, ConnectionState> = emptyMap()
+            deviceConnectionManager.connectionStates.collect { states ->
+                if (!isWifiConnected) {
+                    lastStates = states
+                    return@collect
+                }
+                states.forEach { (deviceId, state) ->
+                    val lastState = lastStates[deviceId]
+                    if (state == ConnectionState.DISCONNECTED && lastState != ConnectionState.DISCONNECTED) {
+                        if (deviceConnectionManager.isManualDisconnect(deviceId)) {
+                            Log.d(TAG, "Skip auto-reconnect for $deviceId - manual disconnect")
+                            return@forEach
+                        }
+                        val device = deviceConnectionManager.deviceList.value.firstOrNull {
+                            deviceConnectionManager.getDeviceId(it) == deviceId
+                        }
+                        if (device != null) {
+                            Log.d(TAG, "Auto-reconnecting device: ${device.config.name}")
+                            deviceConnectionManager.connectDevice(device, scope)
+                        }
+                    }
+                }
+                lastStates = states
             }
         }
     }
@@ -245,7 +316,7 @@ class AudioService : Service() {
         // 断开设备
         fun disconnectDevice(deviceId: String) {
             scope.launch {
-                deviceConnectionManager.disconnectDevice(deviceId)
+                deviceConnectionManager.disconnectDevice(deviceId, manual = true)
             }
         }
 
@@ -357,6 +428,12 @@ class AudioService : Service() {
         // Unregister network callback
         networkCallback?.let {
             getSystemService<ConnectivityManager>()?.unregisterNetworkCallback(it)
+        }
+
+        wakeLock?.let {
+            if (it.isHeld) {
+                it.release()
+            }
         }
 
         scope.launch {

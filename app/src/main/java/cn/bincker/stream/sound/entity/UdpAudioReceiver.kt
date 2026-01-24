@@ -2,8 +2,8 @@ package cn.bincker.stream.sound.entity
 
 import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
+import android.os.SystemClock
 import android.util.Log
 import cn.bincker.stream.sound.config.AudioEncryptionMethod
 import cn.bincker.stream.sound.utils.aes128gcmDecrypt
@@ -19,7 +19,6 @@ import java.net.InetAddress
 import android.media.AudioTimestamp
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import kotlin.math.min
 
 class UdpAudioReceiver(
     private val serverAddress: InetAddress,
@@ -36,7 +35,7 @@ class UdpAudioReceiver(
 ) {
     companion object {
         private const val TAG = "UdpAudioReceiver"
-        private const val UDP_BUFFER_SIZE = 2048
+        private const val UDP_BUFFER_SIZE = 8192
         private const val AUDIO_BUFFER_SIZE = 8192
         private const val SEQUENCE_THRESHOLD = 100 // 容忍的丢包数量
     }
@@ -53,6 +52,7 @@ class UdpAudioReceiver(
     private data class AudioPacket(
         val data: ByteArray,
         val captureTimeClientNs: Long,
+        val receiveTimeClientNs: Long,
     )
 
     private val audioQueue = mutableListOf<AudioPacket>()
@@ -65,6 +65,15 @@ class UdpAudioReceiver(
     private val serverToClientOffsetNs = AtomicLong(serverToClientOffsetNs)
     private val lastSyncRttNs = AtomicLong(lastSyncRttNs)
     private val endToEndLatencyNs = AtomicLong(-1L)
+    private val totalPackets = AtomicLong(0L)
+    private val shortPackets = AtomicLong(0L)
+    private val decryptErrors = AtomicLong(0L)
+    private val tooOldPackets = AtomicLong(0L)
+    private val lastPacketLength = AtomicLong(0L)
+    private val lastDecryptedLength = AtomicLong(0L)
+    private val lastAlignedLength = AtomicLong(0L)
+    private val lastWrittenLength = AtomicLong(0L)
+    private var consecutiveTooOld = 0
 
     fun setServerToClientOffsetNs(offsetNs: Long) {
         serverToClientOffsetNs.set(offsetNs)
@@ -95,6 +104,7 @@ class UdpAudioReceiver(
                 if (datagramSocket == null) {
                     datagramSocket = DatagramSocket(clientPort)
                 }
+                datagramSocket?.receiveBufferSize = maxOf(datagramSocket?.receiveBufferSize ?: 0, 1 shl 20)
 
                 // Setup AudioTrack
                 setupAudioTrack()
@@ -132,6 +142,11 @@ class UdpAudioReceiver(
 
             isReceiving.set(false)
             isPlaying.set(false)
+            try {
+                datagramSocket?.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing UDP socket during stop", e)
+            }
 
             // Cancel jobs
             receiverJob?.cancel()
@@ -194,9 +209,10 @@ class UdpAudioReceiver(
         try {
             while (isReceiving.get()) {
                 datagramSocket?.receive(packet)
+                val receiveTimeNs = System.nanoTime()
 
                 if (packet.length >= 4) {
-                    processPacket(packet.data, packet.length)
+                    processPacket(packet.data, packet.length, receiveTimeNs)
                     lastPacketTime = System.currentTimeMillis()
                 }
             }
@@ -207,12 +223,15 @@ class UdpAudioReceiver(
         }
     }
 
-    private fun processPacket(data: ByteArray, length: Int) {
+    private fun processPacket(data: ByteArray, length: Int, receiveTimeNs: Long) {
         // Packet: [seq(4)] + [capture_time_ns(8)] + [encrypted_audio]
         if (length < 12) {
+            shortPackets.incrementAndGet()
             Log.w(TAG, "Packet too short: $length bytes")
             return
         }
+        totalPackets.incrementAndGet()
+        lastPacketLength.set(length.toLong())
 
         try {
             // Parse sequence number (big-endian)
@@ -231,39 +250,71 @@ class UdpAudioReceiver(
             } else {
                 0L
             }
+            val normalizedCaptureTimeNs = normalizeCaptureTime(captureTimeClientNs, receiveTimeNs)
 
             // Check sequence ordering
-            val expected = expectedSequence.get()
+            var expected = expectedSequence.get()
+            if (expected == 0L && totalPackets.get() == 1L) {
+                expectedSequence.set(sequenceNumber.toLong())
+                expected = sequenceNumber.toLong()
+            }
             if (sequenceNumber < expected - SEQUENCE_THRESHOLD) {
                 // Too old packet, ignore
+                tooOldPackets.incrementAndGet()
+                consecutiveTooOld++
+                if (consecutiveTooOld >= 50) {
+                    Log.w(TAG, "Resync sequence: expected=$expected, got=$sequenceNumber")
+                    expectedSequence.set(sequenceNumber.toLong())
+                    consecutiveTooOld = 0
+                }
                 return
             }
+            consecutiveTooOld = 0
 
             if (sequenceNumber > expected + SEQUENCE_THRESHOLD) {
                 Log.w(TAG, "Large sequence gap: expected=$expected, got=$sequenceNumber")
                 // Reset expected sequence
-                expectedSequence.set((sequenceNumber + 1).toLong())
-            } else if (sequenceNumber >= expected) {
                 expectedSequence.set((sequenceNumber + 1).toLong())
             }
 
             // Decrypt audio data
             val encryptedAudio = data.copyOfRange(12, length)
             val decryptedAudio = decryptAudioData(encryptedAudio, sequenceNumber)
+            lastDecryptedLength.set(decryptedAudio.size.toLong())
 
-            // Add to audio queue
-            synchronized(queueLock) {
-                audioQueue.add(AudioPacket(decryptedAudio, captureTimeClientNs))
-
-                // Limit queue size to prevent memory overflow
-                while (audioQueue.size > 50) {
-                    audioQueue.removeFirstOrNull()
-                }
+            if (sequenceNumber >= expected) {
+                expectedSequence.set((sequenceNumber + 1).toLong())
             }
+            enqueueAudioPacket(decryptedAudio, normalizedCaptureTimeNs, receiveTimeNs)
 
         } catch (e: Exception) {
+            decryptErrors.incrementAndGet()
             Log.e(TAG, "Error processing packet", e)
         }
+    }
+
+    private fun enqueueAudioPacket(data: ByteArray, captureTimeClientNs: Long, receiveTimeNs: Long) {
+        synchronized(queueLock) {
+            audioQueue.add(AudioPacket(data, captureTimeClientNs, receiveTimeNs))
+
+            // Limit queue size to prevent memory overflow
+            while (audioQueue.size > 50) {
+                audioQueue.removeFirstOrNull()
+            }
+        }
+    }
+
+    private fun normalizeCaptureTime(rawCaptureTimeNs: Long, receiveTimeNs: Long): Long {
+        if (rawCaptureTimeNs <= 0L) {
+            return receiveTimeNs
+        }
+        if (rawCaptureTimeNs > receiveTimeNs + 5_000_000_000L) {
+            return receiveTimeNs
+        }
+        if (receiveTimeNs - rawCaptureTimeNs > 60_000_000_000L) {
+            return receiveTimeNs
+        }
+        return rawCaptureTimeNs
     }
 
     private fun buildUdpAudioIv(sequenceNumber: Int): ByteArray {
@@ -309,66 +360,117 @@ class UdpAudioReceiver(
         try {
             audioTrack.play()
 
-            var silenceStart = 0L
-            var isInSilence = false
+            var lastStatsLogMs = SystemClock.elapsedRealtime()
+            var pendingData: ByteArray? = null
+            var pendingOffset = 0
+            var pendingCaptureTimeNs = 0L
+            var pendingReceiveTimeNs = 0L
+            var pendingFirstFrame = true
 
             while (isPlaying.get()) {
-                val packet: AudioPacket? = synchronized(queueLock) {
-                    if (audioQueue.isNotEmpty()) {
-                        audioQueue.removeFirstOrNull()
-                    } else {
-                        null
+                val nowMs = SystemClock.elapsedRealtime()
+                if (nowMs - lastStatsLogMs >= 1000) {
+                    val queueSize = synchronized(queueLock) { audioQueue.size }
+                    Log.i(
+                        TAG,
+                        "audio stats: packets=${totalPackets.get()}, short=${shortPackets.get()}, decryptErr=${decryptErrors.get()}, " +
+                            "tooOld=${tooOldPackets.get()}, lastLen=${lastPacketLength.get()}, decLen=${lastDecryptedLength.get()}, " +
+                            "aligned=${lastAlignedLength.get()}, written=${lastWrittenLength.get()}, queue=$queueSize"
+                    )
+                    lastStatsLogMs = nowMs
+                }
+
+                if (pendingData == null) {
+                    val packet: AudioPacket? = synchronized(queueLock) {
+                        if (audioQueue.isNotEmpty()) {
+                            audioQueue.removeFirstOrNull()
+                        } else {
+                            null
+                        }
+                    }
+                    if (packet != null) {
+                        pendingData = packet.data
+                        pendingOffset = 0
+                        pendingCaptureTimeNs = packet.captureTimeClientNs
+                        pendingReceiveTimeNs = packet.receiveTimeClientNs
+                        pendingFirstFrame = true
                     }
                 }
 
-                if (packet != null) {
-                    val audioData = packet.data
-                    val captureTimeClientNs = packet.captureTimeClientNs
+                if (pendingData != null) {
+                    val audioData = pendingData ?: break
+                    val captureTimeClientNs = pendingCaptureTimeNs
+                    val receiveTimeClientNs = pendingReceiveTimeNs
 
-                    // Check for silence (to prevent system muting after 60s of silence)
-                    val isSilent = audioData.all { it.toInt() == 0 }
-
-                    if (isSilent) {
-                        if (!isInSilence) {
-                            silenceStart = System.currentTimeMillis()
-                            isInSilence = true
-                        } else if (System.currentTimeMillis() - silenceStart > 5000) {
-                            // Skip silence after 5 seconds to prevent system muting
-                            kotlinx.coroutines.delay(10)
-                        }
-                        continue
-                    } else {
-                        isInSilence = false
-                    }
-
-                    // Write audio data to track
                     val firstFrameIndex = framesWrittenTotal
-                    val bytesWritten = audioTrack.write(audioData, 0, audioData.size, AudioTrack.WRITE_NON_BLOCKING)
-
-                    if (bytesWritten < 0) {
-                        Log.w(TAG, "AudioTrack write failed: $bytesWritten")
+                    val alignedSize = audioData.size - (audioData.size % bytesPerFrame)
+                    lastAlignedLength.set(alignedSize.toLong())
+                    if (alignedSize <= 0) {
+                        pendingData = null
                         continue
                     }
+                    if (audioTrack.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                        try {
+                            audioTrack.play()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "AudioTrack play failed", e)
+                        }
+                    }
+                    var offset = pendingOffset
+                    var totalWritten = 0
+                    while (offset < alignedSize) {
+                        val bytesWritten = audioTrack.write(
+                            audioData,
+                            offset,
+                            alignedSize - offset,
+                            AudioTrack.WRITE_BLOCKING
+                        )
+                        if (bytesWritten < 0) {
+                            Log.w(TAG, "AudioTrack write failed: $bytesWritten")
+                            break
+                        }
+                        if (bytesWritten == 0) {
+                            kotlinx.coroutines.delay(5)
+                            break
+                        }
+                        offset += bytesWritten
+                        totalWritten += bytesWritten
+                    }
 
-                    val framesWritten = bytesWritten / bytesPerFrame
+                    if (totalWritten <= 0) {
+                        continue
+                    }
+                    lastWrittenLength.set(totalWritten.toLong())
+
+                    val framesWritten = totalWritten / bytesPerFrame
                     framesWrittenTotal += framesWritten
 
-                    // Estimate play time for the first frame of this packet, then compute end-to-end latency.
-                    if (captureTimeClientNs != 0L && framesWritten > 0) {
+                    if (framesWritten > 0 && pendingFirstFrame) {
                         val hasTs = audioTrack.getTimestamp(timestamp)
                         if (hasTs) {
                             val frameDelta = firstFrameIndex - timestamp.framePosition
                             if (frameDelta >= 0) {
                                 val playTimeNs = timestamp.nanoTime + (frameDelta * 1_000_000_000L) / sampleRate
-                                val latencyNs = playTimeNs - captureTimeClientNs
+                                val rawLatencyNs = playTimeNs - captureTimeClientNs
+                                val latencyNs = if (rawLatencyNs >= 1_000_000L) {
+                                    rawLatencyNs
+                                } else {
+                                    playTimeNs - receiveTimeClientNs
+                                }
                                 if (latencyNs >= 0) {
                                     endToEndLatencyNs.set(latencyNs)
                                 }
                             }
                         }
                     }
+                    pendingFirstFrame = false
+                    if (offset >= alignedSize) {
+                        pendingData = null
+                        pendingOffset = 0
+                    } else {
+                        pendingOffset = offset
+                    }
                 } else {
-                    // No audio data available, wait briefly
                     kotlinx.coroutines.delay(10)
                 }
             }
