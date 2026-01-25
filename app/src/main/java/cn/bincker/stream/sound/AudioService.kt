@@ -188,6 +188,11 @@ class AudioService : Service() {
                     deviceId to PlaybackStats(
                         udpPort = device.getCurrentUdpPort(),
                         endToEndLatencyMs = device.getEndToEndLatencyMs().takeIf { it >= 0 },
+                        networkLatencyMs = device.getNetworkLatencyMs().takeIf { it >= 0 },
+                        bufferLatencyMs = device.getPlaybackBufferLatencyMs().takeIf { it >= 0 },
+                        decryptLatencyMs = device.getDecryptLatencyMs().takeIf { it >= 0 },
+                        syncRttMs = device.getSyncRttMs().takeIf { it >= 0 },
+                        outputMethod = device.getOutputMethod(),
                     )
                 }.toMap()
             }

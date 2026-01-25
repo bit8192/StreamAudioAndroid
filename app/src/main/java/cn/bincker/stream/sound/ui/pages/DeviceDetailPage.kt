@@ -36,6 +36,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import cn.bincker.stream.sound.config.AudioEncryptionMethod
 import cn.bincker.stream.sound.config.DeviceConfig
+import cn.bincker.stream.sound.entity.PlaybackOutputMethod
 import cn.bincker.stream.sound.vm.ConnectionState
 import cn.bincker.stream.sound.vm.DeviceListViewModel
 
@@ -52,13 +53,17 @@ fun DeviceDetailPage(
     val playingStates by vm.playingStates.collectAsState()
     val audioInfos by vm.audioInfos.collectAsState()
     val playbackStats by vm.playbackStats.collectAsState()
+    val appConfig by vm.appConfig.collectAsState()
 
     val device = remember(deviceList, deviceId) { deviceList.firstOrNull { it.config.address == deviceId } }
     val connectionState = connectionStates[deviceId] ?: ConnectionState.DISCONNECTED
     val isPlaying = playingStates[deviceId] ?: false
     val stats = playbackStats[deviceId]
+    fun formatMs(value: Long?): String = value?.let { "${it}ms" } ?: "-"
+    val isOboeOutput = stats?.outputMethod == PlaybackOutputMethod.OBOE
 
     var initialized by rememberSaveable(deviceId) { mutableStateOf(false) }
+    var playbackConfigInitialized by rememberSaveable { mutableStateOf(false) }
 
     var name by rememberSaveable(deviceId) { mutableStateOf("") }
     var ip by rememberSaveable(deviceId) { mutableStateOf("") }
@@ -66,6 +71,8 @@ fun DeviceDetailPage(
     var publicKey by rememberSaveable(deviceId) { mutableStateOf("") }
     var autoConnect by rememberSaveable(deviceId) { mutableStateOf(true) }
     var audioEncryption by rememberSaveable(deviceId) { mutableStateOf(AudioEncryptionMethod.XOR_256) }
+    var audioBufferSizeText by rememberSaveable { mutableStateOf("") }
+    var packetThresholdText by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(deviceId) {
         vm.refreshAppConfig()
@@ -82,6 +89,14 @@ fun DeviceDetailPage(
             publicKey = device.config.publicKey
             autoConnect = device.config.autoPlay
             audioEncryption = device.config.audioEncryption
+        }
+    }
+
+    LaunchedEffect(appConfig) {
+        if (appConfig != null && !playbackConfigInitialized) {
+            playbackConfigInitialized = true
+            audioBufferSizeText = appConfig?.audioBufferSizeBytes?.toString().orEmpty()
+            packetThresholdText = appConfig?.packetSequenceThreshold?.toString().orEmpty()
         }
     }
 
@@ -130,7 +145,42 @@ fun DeviceDetailPage(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text("端到端延迟")
-                    Text(stats?.endToEndLatencyMs?.let { "${it}ms" } ?: "-", style = MaterialTheme.typography.titleMedium)
+                    Text(formatMs(stats?.endToEndLatencyMs), style = MaterialTheme.typography.titleMedium)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("播放方式")
+                    Text(stats?.outputMethod?.label ?: "-", style = MaterialTheme.typography.titleMedium)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("网络传输延迟")
+                    Text(formatMs(stats?.networkLatencyMs), style = MaterialTheme.typography.titleMedium)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("播放缓冲延迟")
+                    Text(formatMs(stats?.bufferLatencyMs), style = MaterialTheme.typography.titleMedium)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("解密延迟")
+                    Text(formatMs(stats?.decryptLatencyMs), style = MaterialTheme.typography.titleMedium)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("时钟同步 RTT")
+                    Text(formatMs(stats?.syncRttMs), style = MaterialTheme.typography.titleMedium)
                 }
             }
         }
@@ -208,6 +258,65 @@ fun DeviceDetailPage(
                 )
             }
         }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text("播放调优", style = MaterialTheme.typography.titleMedium)
+
+        if (!isOboeOutput) {
+            OutlinedTextField(
+                value = audioBufferSizeText,
+                onValueChange = { audioBufferSizeText = it },
+                label = { Text("播放缓冲大小(字节)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
+        } else {
+            Text(
+                "当前输出为 Oboe，缓冲大小由系统控制。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        OutlinedTextField(
+            value = packetThresholdText,
+            onValueChange = { packetThresholdText = it },
+            label = { Text("丢包容忍阈值") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        )
+
+        Text(
+            "说明: 缓冲越小延迟越低，但更容易卡顿；阈值越小丢包更敏感。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Button(
+            onClick = {
+                val bufferSize = if (isOboeOutput) {
+                    appConfig?.audioBufferSizeBytes ?: 8192
+                } else {
+                    val parsed = audioBufferSizeText.toIntOrNull()
+                    if (parsed == null || parsed <= 0) {
+                        Toast.makeText(context, "播放缓冲大小格式不正确", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+                    parsed
+                }
+                val threshold = packetThresholdText.toIntOrNull()
+                if (threshold == null || threshold <= 0) {
+                    Toast.makeText(context, "丢包容忍阈值格式不正确", Toast.LENGTH_SHORT).show()
+                    return@Button
+                }
+                vm.savePlaybackConfig(bufferSize, threshold)
+                Toast.makeText(context, "播放配置已保存", Toast.LENGTH_SHORT).show()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("保存播放配置") }
 
         Spacer(modifier = Modifier.height(8.dp))
 

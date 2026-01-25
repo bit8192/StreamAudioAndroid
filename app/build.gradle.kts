@@ -27,6 +27,11 @@ android {
         versionName = versionProps.getProperty("VERSION_NAME", "1.0.0")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        externalNativeBuild {
+            cmake {
+                arguments += listOf("-DANDROID_STL=c++_shared")
+            }
+        }
     }
 
     buildTypes {
@@ -45,6 +50,13 @@ android {
     buildFeatures {
         buildConfig = true
         compose = true
+        prefab = true
+    }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 }
 
@@ -63,6 +75,7 @@ dependencies {
     implementation("org.bouncycastle:bcprov-jdk15to18:1.83")
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.83")
     implementation("org.yaml:snakeyaml:2.5")
+    implementation("com.google.oboe:oboe:1.7.0")
 
     // Hilt
     implementation("com.google.dagger:hilt-android:2.54")

@@ -136,6 +136,8 @@ class DeviceConnectionManager @Inject constructor(
         return mutex.withLock { activeDevices.toMap() }
     }
 
+    suspend fun getAppConfigSnapshot() = appConfigRepository.getAppConfigSnapshot()
+
     /**
      * 连接设备
      */

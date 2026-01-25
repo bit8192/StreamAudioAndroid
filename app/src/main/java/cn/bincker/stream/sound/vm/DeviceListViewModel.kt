@@ -218,6 +218,13 @@ class DeviceListViewModel @Inject constructor(
         }
     }
 
+    fun savePlaybackConfig(audioBufferSizeBytes: Int, packetSequenceThreshold: Int) {
+        viewModelScope.launch {
+            appConfigRepository.updatePlaybackConfig(audioBufferSizeBytes, packetSequenceThreshold)
+            _appConfig.value = appConfigRepository.getAppConfigSnapshot()
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         // 取消所有的收集任务

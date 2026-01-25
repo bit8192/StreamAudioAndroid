@@ -133,6 +133,14 @@ class AppConfigRepository {
         }
     }
 
+    suspend fun updatePlaybackConfig(audioBufferSizeBytes: Int, packetSequenceThreshold: Int) {
+        mutex.withLock {
+            appConfig.audioBufferSizeBytes = audioBufferSizeBytes
+            appConfig.packetSequenceThreshold = packetSequenceThreshold
+            saveAppConfig()
+        }
+    }
+
     suspend fun addDeviceConfig(config: DeviceConfig) {
         _deviceConfigList.add(config)
         saveAppConfig()

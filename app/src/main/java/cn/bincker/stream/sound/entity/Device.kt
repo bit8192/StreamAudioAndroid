@@ -483,6 +483,10 @@ class Device(
                 connectionManager.updateDeviceAudioEncryption(config.address, encryptionMethod)
             }
 
+            val appConfig = connectionManager.getAppConfigSnapshot()
+            val safeBufferSizeBytes = appConfig.audioBufferSizeBytes.coerceIn(256, 1 shl 20)
+            val safeSequenceThreshold = appConfig.packetSequenceThreshold.coerceIn(1, 10000)
+
             // Start UDP receiver with udpAudioKey
             try {
                 val serverAddress = channel!!.remoteAddress as InetSocketAddress
@@ -496,6 +500,8 @@ class Device(
                     bits = bits,
                     channels = channels,
                     format = format,
+                    audioBufferSizeBytes = safeBufferSizeBytes,
+                    sequenceThreshold = safeSequenceThreshold,
                     serverToClientOffsetNs = serverToClientOffsetNs,
                     lastSyncRttNs = lastSyncRttNs,
                 )
@@ -567,6 +573,26 @@ class Device(
 
     fun getEndToEndLatencyMs(): Long {
         return udpAudioReceiver?.getEndToEndLatencyMs() ?: -1L
+    }
+
+    fun getNetworkLatencyMs(): Long {
+        return udpAudioReceiver?.getNetworkLatencyMs() ?: -1L
+    }
+
+    fun getPlaybackBufferLatencyMs(): Long {
+        return udpAudioReceiver?.getPlaybackBufferLatencyMs() ?: -1L
+    }
+
+    fun getDecryptLatencyMs(): Long {
+        return udpAudioReceiver?.getDecryptLatencyMs() ?: -1L
+    }
+
+    fun getSyncRttMs(): Long {
+        return udpAudioReceiver?.getSyncRttMs() ?: -1L
+    }
+
+    fun getOutputMethod(): PlaybackOutputMethod {
+        return udpAudioReceiver?.getOutputMethod() ?: PlaybackOutputMethod.UNKNOWN
     }
 
     fun getLastAudioInfo(): AudioInfo? = lastAudioInfo

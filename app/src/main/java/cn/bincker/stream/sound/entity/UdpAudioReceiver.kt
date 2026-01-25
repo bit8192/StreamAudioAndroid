@@ -30,18 +30,23 @@ class UdpAudioReceiver(
     private val bits: Int,
     private val channels: Int,
     private val format: Int,
+    audioBufferSizeBytes: Int = DEFAULT_AUDIO_BUFFER_SIZE,
+    sequenceThreshold: Int = DEFAULT_SEQUENCE_THRESHOLD,
     serverToClientOffsetNs: Long = 0L,
     lastSyncRttNs: Long = -1L,
 ) {
     companion object {
         private const val TAG = "UdpAudioReceiver"
         private const val UDP_BUFFER_SIZE = 8192
-        private const val AUDIO_BUFFER_SIZE = 8192
-        private const val SEQUENCE_THRESHOLD = 100 // 容忍的丢包数量
+        const val DEFAULT_AUDIO_BUFFER_SIZE = 8192
+        const val DEFAULT_SEQUENCE_THRESHOLD = 100
+        private const val MAX_QUEUE_SIZE = 50
     }
 
     private var datagramSocket: DatagramSocket? = null
     private var audioTrack: AudioTrack? = null
+    private var oboePlayer: OboeAudioPlayer? = null
+    private var useOboe = false
     private var receiverJob: Job? = null
     private var audioPlayerJob: Job? = null
 
@@ -53,6 +58,7 @@ class UdpAudioReceiver(
         val data: ByteArray,
         val captureTimeClientNs: Long,
         val receiveTimeClientNs: Long,
+        val captureTimeValid: Boolean,
     )
 
     private val audioQueue = mutableListOf<AudioPacket>()
@@ -65,6 +71,9 @@ class UdpAudioReceiver(
     private val serverToClientOffsetNs = AtomicLong(serverToClientOffsetNs)
     private val lastSyncRttNs = AtomicLong(lastSyncRttNs)
     private val endToEndLatencyNs = AtomicLong(-1L)
+    private val networkLatencyNs = AtomicLong(-1L)
+    private val playbackBufferLatencyNs = AtomicLong(-1L)
+    private val decryptLatencyNs = AtomicLong(-1L)
     private val totalPackets = AtomicLong(0L)
     private val shortPackets = AtomicLong(0L)
     private val decryptErrors = AtomicLong(0L)
@@ -74,6 +83,10 @@ class UdpAudioReceiver(
     private val lastAlignedLength = AtomicLong(0L)
     private val lastWrittenLength = AtomicLong(0L)
     private var consecutiveTooOld = 0
+    private val audioBufferSizeBytes = audioBufferSizeBytes.coerceAtLeast(256)
+    private val sequenceThreshold = sequenceThreshold.coerceAtLeast(1)
+    @Volatile
+    private var outputMethod: PlaybackOutputMethod = PlaybackOutputMethod.UNKNOWN
 
     fun setServerToClientOffsetNs(offsetNs: Long) {
         serverToClientOffsetNs.set(offsetNs)
@@ -87,6 +100,28 @@ class UdpAudioReceiver(
         val v = endToEndLatencyNs.get()
         return if (v >= 0) v / 1_000_000L else -1L
     }
+
+    fun getNetworkLatencyMs(): Long {
+        val v = networkLatencyNs.get()
+        return if (v >= 0) v / 1_000_000L else -1L
+    }
+
+    fun getPlaybackBufferLatencyMs(): Long {
+        val v = playbackBufferLatencyNs.get()
+        return if (v >= 0) v / 1_000_000L else -1L
+    }
+
+    fun getDecryptLatencyMs(): Long {
+        val v = decryptLatencyNs.get()
+        return if (v >= 0) v / 1_000_000L else -1L
+    }
+
+    fun getSyncRttMs(): Long {
+        val v = lastSyncRttNs.get()
+        return if (v >= 0) v / 1_000_000L else -1L
+    }
+
+    fun getOutputMethod(): PlaybackOutputMethod = outputMethod
 
     init {
         datagramSocket = preboundSocket
@@ -106,8 +141,8 @@ class UdpAudioReceiver(
                 }
                 datagramSocket?.receiveBufferSize = maxOf(datagramSocket?.receiveBufferSize ?: 0, 1 shl 20)
 
-                // Setup AudioTrack
-                setupAudioTrack()
+                // Setup audio output
+                setupAudioPlayer()
 
                 isReceiving.set(true)
                 isPlaying.set(true)
@@ -162,7 +197,22 @@ class UdpAudioReceiver(
         }
     }
 
-    private fun setupAudioTrack() {
+    private fun setupAudioPlayer() {
+        if (setupOboePlayer()) {
+            useOboe = true
+            audioTrack = null
+            outputMethod = PlaybackOutputMethod.OBOE
+            val info = oboePlayer?.getStreamInfo()
+            Log.i(
+                TAG,
+                "Audio output: Oboe, sr=${info?.sampleRate}, ch=${info?.channelCount}, " +
+                    "bufFrames=${info?.bufferSizeInFrames}, capFrames=${info?.bufferCapacityInFrames}, " +
+                    "burst=${info?.framesPerBurst}, share=${info?.sharingMode}, perf=${info?.performanceMode}"
+            )
+            return
+        }
+        useOboe = false
+        outputMethod = PlaybackOutputMethod.AUDIO_TRACK
         val channelConfig = when (channels) {
             1 -> AudioFormat.CHANNEL_OUT_MONO
             2 -> AudioFormat.CHANNEL_OUT_STEREO
@@ -178,7 +228,7 @@ class UdpAudioReceiver(
         }
 
         val minBufferSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, encoding)
-        val bufferSize = maxOf(minBufferSize, AUDIO_BUFFER_SIZE)
+        val bufferSize = maxOf(minBufferSize, audioBufferSizeBytes)
 
         val audioAttributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -199,7 +249,30 @@ class UdpAudioReceiver(
             .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             .build()
 
-        Log.i(TAG, "AudioTrack setup: sr=$sampleRate, bits=$bits, ch=$channels, bufferSize=$bufferSize")
+        Log.i(
+            TAG,
+            "Audio output: AudioTrack, sr=$sampleRate, bits=$bits, ch=$channels, " +
+                "bufferSizeBytes=$bufferSize, bufFrames=${audioTrack?.bufferSizeInFrames}, " +
+                "capFrames=${audioTrack?.bufferCapacityInFrames}, perf=${audioTrack?.performanceMode}"
+        )
+    }
+
+    private fun setupOboePlayer(): Boolean {
+        if (bits == 8) return false
+        val bytesPerFrame = channels * (bits / 8)
+        if (bytesPerFrame <= 0) return false
+        val preferredBufferFrames = (audioBufferSizeBytes / bytesPerFrame).coerceAtLeast(0)
+        val player = OboeAudioPlayer()
+        if (!player.open(sampleRate, channels, bits, preferredBufferFrames)) {
+            player.release()
+            return false
+        }
+        if (!player.start()) {
+            player.release()
+            return false
+        }
+        oboePlayer = player
+        return true
     }
 
     private suspend fun receiveLoop() {
@@ -251,6 +324,7 @@ class UdpAudioReceiver(
                 0L
             }
             val normalizedCaptureTimeNs = normalizeCaptureTime(captureTimeClientNs, receiveTimeNs)
+            val captureTimeValid = captureTimeClientNs > 0L && normalizedCaptureTimeNs == captureTimeClientNs
 
             // Check sequence ordering
             var expected = expectedSequence.get()
@@ -258,7 +332,7 @@ class UdpAudioReceiver(
                 expectedSequence.set(sequenceNumber.toLong())
                 expected = sequenceNumber.toLong()
             }
-            if (sequenceNumber < expected - SEQUENCE_THRESHOLD) {
+            if (sequenceNumber < expected - sequenceThreshold) {
                 // Too old packet, ignore
                 tooOldPackets.incrementAndGet()
                 consecutiveTooOld++
@@ -271,7 +345,7 @@ class UdpAudioReceiver(
             }
             consecutiveTooOld = 0
 
-            if (sequenceNumber > expected + SEQUENCE_THRESHOLD) {
+            if (sequenceNumber > expected + sequenceThreshold) {
                 Log.w(TAG, "Large sequence gap: expected=$expected, got=$sequenceNumber")
                 // Reset expected sequence
                 expectedSequence.set((sequenceNumber + 1).toLong())
@@ -279,13 +353,18 @@ class UdpAudioReceiver(
 
             // Decrypt audio data
             val encryptedAudio = data.copyOfRange(12, length)
+            val decryptStartNs = System.nanoTime()
             val decryptedAudio = decryptAudioData(encryptedAudio, sequenceNumber)
+            val decryptElapsedNs = System.nanoTime() - decryptStartNs
+            if (decryptElapsedNs >= 0) {
+                decryptLatencyNs.set(decryptElapsedNs)
+            }
             lastDecryptedLength.set(decryptedAudio.size.toLong())
 
             if (sequenceNumber >= expected) {
                 expectedSequence.set((sequenceNumber + 1).toLong())
             }
-            enqueueAudioPacket(decryptedAudio, normalizedCaptureTimeNs, receiveTimeNs)
+            enqueueAudioPacket(decryptedAudio, normalizedCaptureTimeNs, receiveTimeNs, captureTimeValid)
 
         } catch (e: Exception) {
             decryptErrors.incrementAndGet()
@@ -293,12 +372,17 @@ class UdpAudioReceiver(
         }
     }
 
-    private fun enqueueAudioPacket(data: ByteArray, captureTimeClientNs: Long, receiveTimeNs: Long) {
+    private fun enqueueAudioPacket(
+        data: ByteArray,
+        captureTimeClientNs: Long,
+        receiveTimeNs: Long,
+        captureTimeValid: Boolean,
+    ) {
         synchronized(queueLock) {
-            audioQueue.add(AudioPacket(data, captureTimeClientNs, receiveTimeNs))
+            audioQueue.add(AudioPacket(data, captureTimeClientNs, receiveTimeNs, captureTimeValid))
 
             // Limit queue size to prevent memory overflow
-            while (audioQueue.size > 50) {
+            while (audioQueue.size > MAX_QUEUE_SIZE) {
                 audioQueue.removeFirstOrNull()
             }
         }
@@ -350,7 +434,10 @@ class UdpAudioReceiver(
     }
 
     private suspend fun playbackLoop() {
-        val audioTrack = this.audioTrack ?: return
+        val audioTrack = this.audioTrack
+        val oboePlayer = this.oboePlayer
+        val usingOboe = useOboe && oboePlayer != null
+        if (!usingOboe && audioTrack == null) return
         val bytesPerFrame = channels * (bits / 8)
         if (bytesPerFrame <= 0) return
 
@@ -358,14 +445,20 @@ class UdpAudioReceiver(
         val timestamp = AudioTimestamp()
 
         try {
-            audioTrack.play()
+            if (usingOboe) {
+                oboePlayer.start()
+            } else {
+                audioTrack?.play()
+            }
 
             var lastStatsLogMs = SystemClock.elapsedRealtime()
             var pendingData: ByteArray? = null
             var pendingOffset = 0
             var pendingCaptureTimeNs = 0L
             var pendingReceiveTimeNs = 0L
+            var pendingCaptureTimeValid = false
             var pendingFirstFrame = true
+            val outputLabel = if (usingOboe) "Oboe" else "AudioTrack"
 
             while (isPlaying.get()) {
                 val nowMs = SystemClock.elapsedRealtime()
@@ -373,7 +466,7 @@ class UdpAudioReceiver(
                     val queueSize = synchronized(queueLock) { audioQueue.size }
                     Log.i(
                         TAG,
-                        "audio stats: packets=${totalPackets.get()}, short=${shortPackets.get()}, decryptErr=${decryptErrors.get()}, " +
+                        "audio stats: output=$outputLabel, packets=${totalPackets.get()}, short=${shortPackets.get()}, decryptErr=${decryptErrors.get()}, " +
                             "tooOld=${tooOldPackets.get()}, lastLen=${lastPacketLength.get()}, decLen=${lastDecryptedLength.get()}, " +
                             "aligned=${lastAlignedLength.get()}, written=${lastWrittenLength.get()}, queue=$queueSize"
                     )
@@ -393,6 +486,7 @@ class UdpAudioReceiver(
                         pendingOffset = 0
                         pendingCaptureTimeNs = packet.captureTimeClientNs
                         pendingReceiveTimeNs = packet.receiveTimeClientNs
+                        pendingCaptureTimeValid = packet.captureTimeValid
                         pendingFirstFrame = true
                     }
                 }
@@ -401,6 +495,7 @@ class UdpAudioReceiver(
                     val audioData = pendingData ?: break
                     val captureTimeClientNs = pendingCaptureTimeNs
                     val receiveTimeClientNs = pendingReceiveTimeNs
+                    val captureTimeValid = pendingCaptureTimeValid
 
                     val firstFrameIndex = framesWrittenTotal
                     val alignedSize = audioData.size - (audioData.size % bytesPerFrame)
@@ -409,24 +504,31 @@ class UdpAudioReceiver(
                         pendingData = null
                         continue
                     }
-                    if (audioTrack.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                        try {
-                            audioTrack.play()
-                        } catch (e: Exception) {
-                            Log.w(TAG, "AudioTrack play failed", e)
+                    if (!usingOboe) {
+                        val track = audioTrack
+                        if (track != null && track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                            try {
+                                track.play()
+                            } catch (e: Exception) {
+                                Log.w(TAG, "AudioTrack play failed", e)
+                            }
                         }
                     }
                     var offset = pendingOffset
                     var totalWritten = 0
                     while (offset < alignedSize) {
-                        val bytesWritten = audioTrack.write(
-                            audioData,
-                            offset,
-                            alignedSize - offset,
-                            AudioTrack.WRITE_BLOCKING
-                        )
+                        val bytesWritten = if (usingOboe) {
+                            oboePlayer?.write(audioData, offset, alignedSize - offset) ?: -1
+                        } else {
+                            audioTrack?.write(
+                                audioData,
+                                offset,
+                                alignedSize - offset,
+                                AudioTrack.WRITE_BLOCKING
+                            ) ?: -1
+                        }
                         if (bytesWritten < 0) {
-                            Log.w(TAG, "AudioTrack write failed: $bytesWritten")
+                            Log.w(TAG, "Audio write failed: $bytesWritten")
                             break
                         }
                         if (bytesWritten == 0) {
@@ -446,19 +548,33 @@ class UdpAudioReceiver(
                     framesWrittenTotal += framesWritten
 
                     if (framesWritten > 0 && pendingFirstFrame) {
-                        val hasTs = audioTrack.getTimestamp(timestamp)
-                        if (hasTs) {
-                            val frameDelta = firstFrameIndex - timestamp.framePosition
+                        val timestampResult = if (usingOboe) {
+                            oboePlayer?.getTimestamp()?.let { it.framePosition to it.nanoTime }
+                        } else {
+                            val hasTs = audioTrack?.getTimestamp(timestamp) == true
+                            if (hasTs) timestamp.framePosition to timestamp.nanoTime else null
+                        }
+                        if (timestampResult != null) {
+                            val (framePosition, timeNs) = timestampResult
+                            val frameDelta = firstFrameIndex - framePosition
                             if (frameDelta >= 0) {
-                                val playTimeNs = timestamp.nanoTime + (frameDelta * 1_000_000_000L) / sampleRate
-                                val rawLatencyNs = playTimeNs - captureTimeClientNs
-                                val latencyNs = if (rawLatencyNs >= 1_000_000L) {
-                                    rawLatencyNs
-                                } else {
-                                    playTimeNs - receiveTimeClientNs
+                                val playTimeNs = timeNs + (frameDelta * 1_000_000_000L) / sampleRate
+                                val bufferLatencyNs = playTimeNs - receiveTimeClientNs
+                                if (bufferLatencyNs >= 0) {
+                                    playbackBufferLatencyNs.set(bufferLatencyNs)
                                 }
-                                if (latencyNs >= 0) {
-                                    endToEndLatencyNs.set(latencyNs)
+                                if (captureTimeValid) {
+                                    val networkLatency = receiveTimeClientNs - captureTimeClientNs
+                                    val totalLatency = playTimeNs - captureTimeClientNs
+                                    if (networkLatency >= 0) {
+                                        networkLatencyNs.set(networkLatency)
+                                    }
+                                    if (totalLatency >= 0) {
+                                        endToEndLatencyNs.set(totalLatency)
+                                    }
+                                } else {
+                                    networkLatencyNs.set(-1L)
+                                    endToEndLatencyNs.set(-1L)
                                 }
                             }
                         }
@@ -478,10 +594,18 @@ class UdpAudioReceiver(
         } catch (e: Exception) {
             Log.e(TAG, "Error in playback loop", e)
         } finally {
-            try {
-                audioTrack.stop()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error stopping AudioTrack", e)
+            if (usingOboe) {
+                try {
+                    oboePlayer?.stop()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error stopping Oboe", e)
+                }
+            } else {
+                try {
+                    audioTrack?.stop()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error stopping AudioTrack", e)
+                }
             }
         }
     }
@@ -500,6 +624,14 @@ class UdpAudioReceiver(
         } catch (e: Exception) {
             Log.e(TAG, "Error releasing AudioTrack", e)
         }
+        try {
+            oboePlayer?.release()
+            oboePlayer = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing Oboe", e)
+        }
+        useOboe = false
+        outputMethod = PlaybackOutputMethod.UNKNOWN
 
         synchronized(queueLock) {
             audioQueue.clear()
@@ -515,8 +647,13 @@ class UdpAudioReceiver(
         }
 
         val e2eLatencyMs = getEndToEndLatencyMs()
-        val rttMs = lastSyncRttNs.get().let { if (it >= 0) it / 1_000_000L else -1L }
+        val networkLatencyMs = getNetworkLatencyMs()
+        val bufferLatencyMs = getPlaybackBufferLatencyMs()
+        val decryptLatencyMs = getDecryptLatencyMs()
+        val rttMs = getSyncRttMs()
 
-        return "Queue: $queueSize, LastPacket: ${timeSinceLastPacket}ms ago, Expected: ${expectedSequence.get()}, E2E: ${e2eLatencyMs}ms, RTT: ${rttMs}ms"
+        return "Queue: $queueSize, LastPacket: ${timeSinceLastPacket}ms ago, Expected: ${expectedSequence.get()}, " +
+            "E2E: ${e2eLatencyMs}ms, Net: ${networkLatencyMs}ms, Buffer: ${bufferLatencyMs}ms, " +
+            "Decrypt: ${decryptLatencyMs}ms, RTT: ${rttMs}ms"
     }
 }
