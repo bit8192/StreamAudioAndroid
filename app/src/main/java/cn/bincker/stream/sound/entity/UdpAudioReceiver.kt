@@ -66,7 +66,7 @@ class UdpAudioReceiver(
         val captureTimeValid: Boolean,
     )
 
-    private val audioQueue = mutableListOf<AudioPacket>()
+    private val audioQueue = ArrayDeque<AudioPacket>()
     private val queueLock = Any()
     private val maxQueueSizeLimit = AtomicInteger(maxQueueSize.coerceIn(1, 100))
     private val oboePreferredFrames = AtomicInteger(oboePreferredBufferFrames.coerceIn(0, 4096))
