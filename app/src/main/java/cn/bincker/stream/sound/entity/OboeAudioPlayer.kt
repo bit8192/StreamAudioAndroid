@@ -63,6 +63,11 @@ class OboeAudioPlayer {
         )
     }
 
+    fun setBufferSizeInFrames(frames: Int): Int {
+        if (nativeHandle == 0L) return -1
+        return nativeSetBufferSizeInFrames(nativeHandle, frames)
+    }
+
     fun stop() {
         if (nativeHandle != 0L) {
             nativeStop(nativeHandle)
@@ -90,6 +95,8 @@ class OboeAudioPlayer {
     private external fun nativeGetTimestamp(handle: Long, outTimestamp: LongArray): Boolean
 
     private external fun nativeGetStreamInfo(handle: Long, outInfo: IntArray): Boolean
+
+    private external fun nativeSetBufferSizeInFrames(handle: Long, frames: Int): Int
 
     private external fun nativeStop(handle: Long)
 

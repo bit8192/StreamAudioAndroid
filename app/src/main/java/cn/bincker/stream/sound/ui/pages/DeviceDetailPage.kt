@@ -19,6 +19,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -69,10 +71,12 @@ fun DeviceDetailPage(
     var ip by rememberSaveable(deviceId) { mutableStateOf("") }
     var port by rememberSaveable(deviceId) { mutableStateOf("") }
     var publicKey by rememberSaveable(deviceId) { mutableStateOf("") }
-    var autoConnect by rememberSaveable(deviceId) { mutableStateOf(true) }
+    var autoPlay by rememberSaveable(deviceId) { mutableStateOf(true) }
     var audioEncryption by rememberSaveable(deviceId) { mutableStateOf(AudioEncryptionMethod.XOR_256) }
-    var audioBufferSizeText by rememberSaveable { mutableStateOf("") }
-    var packetThresholdText by rememberSaveable { mutableStateOf("") }
+    var audioBufferSize by rememberSaveable { mutableIntStateOf(8192) }
+    var packetThreshold by rememberSaveable { mutableIntStateOf(0) }
+    var maxQueueSize by rememberSaveable { mutableIntStateOf(50) }
+    var oboeBufferFrames by rememberSaveable { mutableIntStateOf(0) }
 
     LaunchedEffect(deviceId) {
         vm.refreshAppConfig()
@@ -87,7 +91,7 @@ fun DeviceDetailPage(
             ip = parts.getOrNull(0).orEmpty()
             port = parts.getOrNull(1) ?: "12345"
             publicKey = device.config.publicKey
-            autoConnect = device.config.autoPlay
+            autoPlay = device.config.autoPlay
             audioEncryption = device.config.audioEncryption
         }
     }
@@ -95,8 +99,10 @@ fun DeviceDetailPage(
     LaunchedEffect(appConfig) {
         if (appConfig != null && !playbackConfigInitialized) {
             playbackConfigInitialized = true
-            audioBufferSizeText = appConfig?.audioBufferSizeBytes?.toString().orEmpty()
-            packetThresholdText = appConfig?.packetSequenceThreshold?.toString().orEmpty()
+            audioBufferSize = appConfig?.audioBufferSizeBytes ?: 8192
+            packetThreshold = appConfig?.packetSequenceThreshold ?: 0
+            maxQueueSize = appConfig?.maxAudioQueueSize ?: 50
+            oboeBufferFrames = appConfig?.oboePreferredBufferFrames ?: 0
         }
     }
 
@@ -263,59 +269,123 @@ fun DeviceDetailPage(
 
         Text("播放调优", style = MaterialTheme.typography.titleMedium)
 
-        if (!isOboeOutput) {
-            OutlinedTextField(
-                value = audioBufferSizeText,
-                onValueChange = { audioBufferSizeText = it },
-                label = { Text("播放缓冲大小(字节)") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            )
+        if (isOboeOutput) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Oboe 首选缓冲帧数")
+                    Text(oboeBufferFrames.toString())
+                }
+                Slider(
+                    value = oboeBufferFrames.toFloat(),
+                    onValueChange = { value ->
+                        val newValue = value.toInt().coerceIn(0, 4096)
+                        if (newValue != oboeBufferFrames) {
+                            oboeBufferFrames = newValue
+                            vm.updateOboePreferredBufferFrames(newValue)
+                        }
+                    },
+                    valueRange = 0f..100f,
+                    steps = 0,
+                    enabled = !isPlaying
+                )
+                Text(
+                    "提示: 0 表示跟随播放缓冲大小，实际值可能被系统调整。通常设为 0",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         } else {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("音频缓冲区大小 (Byte)")
+                    Text(oboeBufferFrames.toString())
+                }
+                Slider(
+                    value = audioBufferSize.toFloat(),
+                    onValueChange = { value -> audioBufferSize = value.toInt() },
+                    valueRange = 256f..8192f,
+                    steps = 0,
+                    enabled = !isPlaying
+                )
+                Text(
+                    "提示: 值越小延迟越低越容易卡顿或爆音",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("丢包容忍阈值")
+                Text(packetThreshold.toString())
+            }
+            Slider(
+                value = packetThreshold.toFloat(),
+                onValueChange = { value ->
+                    val newValue = value.toInt().coerceIn(0, 100)
+                    if (newValue != packetThreshold) {
+                        packetThreshold = newValue
+                        vm.updatePacketSequenceThreshold(newValue)
+                    }
+                },
+                valueRange = 0f..100f,
+                steps = 0,
+            )
             Text(
-                "当前输出为 Oboe，缓冲大小由系统控制。",
+                "提示: 局域网通常设为0，若有丢包或网络延迟过高可尝试设置更大的值",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
-        OutlinedTextField(
-            value = packetThresholdText,
-            onValueChange = { packetThresholdText = it },
-            label = { Text("丢包容忍阈值") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        )
-
-        Text(
-            "说明: 缓冲越小延迟越低，但更容易卡顿；阈值越小丢包更敏感。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("最大音频队列长度")
+                Text(maxQueueSize.toString())
+            }
+            Slider(
+                value = maxQueueSize.toFloat(),
+                onValueChange = { value ->
+                    val newValue = value.toInt().coerceIn(1, 100)
+                    if (newValue != maxQueueSize) {
+                        maxQueueSize = newValue
+                        vm.updateMaxAudioQueueSize(newValue)
+                    }
+                },
+                valueRange = 1f..100f,
+                steps = 0,
+            )
+            Text(
+                "提示: 应用层的包缓冲数量，值越小延迟越低越容易卡顿或爆音",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
 
         Button(
             onClick = {
-                val bufferSize = if (isOboeOutput) {
-                    appConfig?.audioBufferSizeBytes ?: 8192
-                } else {
-                    val parsed = audioBufferSizeText.toIntOrNull()
-                    if (parsed == null || parsed <= 0) {
-                        Toast.makeText(context, "播放缓冲大小格式不正确", Toast.LENGTH_SHORT).show()
-                        return@Button
-                    }
-                    parsed
-                }
-                val threshold = packetThresholdText.toIntOrNull()
-                if (threshold == null || threshold <= 0) {
-                    Toast.makeText(context, "丢包容忍阈值格式不正确", Toast.LENGTH_SHORT).show()
-                    return@Button
-                }
-                vm.savePlaybackConfig(bufferSize, threshold)
+                vm.savePlaybackConfig(audioBufferSize, packetThreshold, maxQueueSize, oboeBufferFrames)
                 Toast.makeText(context, "播放配置已保存", Toast.LENGTH_SHORT).show()
             },
             modifier = Modifier.fillMaxWidth(),
+            enabled = !isPlaying
         ) { Text("保存播放配置") }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -360,8 +430,8 @@ fun DeviceDetailPage(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text("自动连接")
-            Switch(checked = autoConnect, onCheckedChange = { autoConnect = it })
+            Text("自动连接并播放")
+            Switch(checked = autoPlay, onCheckedChange = { autoPlay = it })
         }
 
         Text("音频流加密方式", style = MaterialTheme.typography.titleSmall)
@@ -399,7 +469,7 @@ fun DeviceDetailPage(
                     name = name.trim(),
                     address = newAddress,
                     publicKey = publicKey.trim(),
-                    autoPlay = autoConnect,
+                    autoPlay = autoPlay,
                     audioEncryption = audioEncryption,
                 )
 

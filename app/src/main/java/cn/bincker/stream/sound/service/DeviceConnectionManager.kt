@@ -130,6 +130,30 @@ class DeviceConnectionManager @Inject constructor(
         }
     }
 
+    suspend fun updateMaxAudioQueueSize(maxAudioQueueSize: Int) {
+        val safeSize = maxAudioQueueSize.coerceIn(1, 100)
+        val devices = mutex.withLock { activeDevices.values.toList() }
+        devices.forEach { device ->
+            device.updateMaxAudioQueueSize(safeSize)
+        }
+    }
+
+    suspend fun updateOboePreferredBufferFrames(oboePreferredBufferFrames: Int) {
+        val safeFrames = oboePreferredBufferFrames.coerceIn(0, 4096)
+        val devices = mutex.withLock { activeDevices.values.toList() }
+        devices.forEach { device ->
+            device.updateOboePreferredBufferFrames(safeFrames)
+        }
+    }
+
+    suspend fun updatePacketSequenceThreshold(packetSequenceThreshold: Int) {
+        val safeThreshold = packetSequenceThreshold.coerceIn(0, 10000)
+        val devices = mutex.withLock { activeDevices.values.toList() }
+        devices.forEach { device ->
+            device.updatePacketSequenceThreshold(safeThreshold)
+        }
+    }
+
     fun getDeviceId(device: Device) = device.config.address
 
     suspend fun getActiveDevicesSnapshot(): Map<String, Device> {

@@ -18,7 +18,9 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import android.media.AudioTimestamp
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.abs
 
 class UdpAudioReceiver(
     private val serverAddress: InetAddress,
@@ -32,6 +34,8 @@ class UdpAudioReceiver(
     private val format: Int,
     audioBufferSizeBytes: Int = DEFAULT_AUDIO_BUFFER_SIZE,
     sequenceThreshold: Int = DEFAULT_SEQUENCE_THRESHOLD,
+    maxQueueSize: Int = DEFAULT_MAX_QUEUE_SIZE,
+    oboePreferredBufferFrames: Int = 0,
     serverToClientOffsetNs: Long = 0L,
     lastSyncRttNs: Long = -1L,
 ) {
@@ -40,7 +44,8 @@ class UdpAudioReceiver(
         private const val UDP_BUFFER_SIZE = 8192
         const val DEFAULT_AUDIO_BUFFER_SIZE = 8192
         const val DEFAULT_SEQUENCE_THRESHOLD = 100
-        private const val MAX_QUEUE_SIZE = 50
+        const val DEFAULT_MAX_QUEUE_SIZE = 50
+        private const val HEARTBEAT_INTERVAL_MS = 1000L
     }
 
     private var datagramSocket: DatagramSocket? = null
@@ -63,10 +68,14 @@ class UdpAudioReceiver(
 
     private val audioQueue = mutableListOf<AudioPacket>()
     private val queueLock = Any()
+    private val maxQueueSizeLimit = AtomicInteger(maxQueueSize.coerceIn(1, 100))
+    private val oboePreferredFrames = AtomicInteger(oboePreferredBufferFrames.coerceIn(0, 4096))
 
     // Sequence tracking
     private val expectedSequence = AtomicLong(0)
     private var lastPacketTime = 0L
+    private val lastHeartbeatSentMs = AtomicLong(0L)
+    private val heartbeatPayload = byteArrayOf(0x41, 0x43, 0x4B, 0x31) // "ACK1"
 
     private val serverToClientOffsetNs = AtomicLong(serverToClientOffsetNs)
     private val lastSyncRttNs = AtomicLong(lastSyncRttNs)
@@ -84,7 +93,8 @@ class UdpAudioReceiver(
     private val lastWrittenLength = AtomicLong(0L)
     private var consecutiveTooOld = 0
     private val audioBufferSizeBytes = audioBufferSizeBytes.coerceAtLeast(256)
-    private val sequenceThreshold = sequenceThreshold.coerceAtLeast(1)
+    private val sequenceThresholdLimit = AtomicInteger(sequenceThreshold.coerceAtLeast(0))
+    private val bytesPerFrame = channels * (bits / 8)
     @Volatile
     private var outputMethod: PlaybackOutputMethod = PlaybackOutputMethod.UNKNOWN
 
@@ -122,6 +132,30 @@ class UdpAudioReceiver(
     }
 
     fun getOutputMethod(): PlaybackOutputMethod = outputMethod
+
+    fun setMaxQueueSize(maxQueueSize: Int) {
+        val safeSize = maxQueueSize.coerceIn(1, 100)
+        maxQueueSizeLimit.set(safeSize)
+        synchronized(queueLock) {
+            while (audioQueue.size > safeSize) {
+                audioQueue.removeFirstOrNull()
+            }
+        }
+    }
+
+    fun setSequenceThreshold(sequenceThreshold: Int) {
+        val safeThreshold = sequenceThreshold.coerceAtLeast(0)
+        sequenceThresholdLimit.set(safeThreshold)
+    }
+
+    fun setOboePreferredBufferFrames(preferredFrames: Int) {
+        val safeFrames = preferredFrames.coerceIn(0, 4096)
+        oboePreferredFrames.set(safeFrames)
+        if (useOboe) {
+            val targetFrames = resolveOboePreferredFrames()
+            oboePlayer?.setBufferSizeInFrames(targetFrames)
+        }
+    }
 
     init {
         datagramSocket = preboundSocket
@@ -259,9 +293,7 @@ class UdpAudioReceiver(
 
     private fun setupOboePlayer(): Boolean {
         if (bits == 8) return false
-        val bytesPerFrame = channels * (bits / 8)
-        if (bytesPerFrame <= 0) return false
-        val preferredBufferFrames = (audioBufferSizeBytes / bytesPerFrame).coerceAtLeast(0)
+        val preferredBufferFrames = resolveOboePreferredFrames()
         val player = OboeAudioPlayer()
         if (!player.open(sampleRate, channels, bits, preferredBufferFrames)) {
             player.release()
@@ -275,6 +307,13 @@ class UdpAudioReceiver(
         return true
     }
 
+    private fun resolveOboePreferredFrames(): Int {
+        val preferred = oboePreferredFrames.get()
+        if (preferred > 0) return preferred
+        if (bytesPerFrame <= 0) return 0
+        return (audioBufferSizeBytes / bytesPerFrame).coerceAtLeast(0)
+    }
+
     private suspend fun receiveLoop() {
         val buffer = ByteArray(UDP_BUFFER_SIZE)
         val packet = DatagramPacket(buffer, buffer.size)
@@ -285,7 +324,10 @@ class UdpAudioReceiver(
                 val receiveTimeNs = System.nanoTime()
 
                 if (packet.length >= 4) {
-                    processPacket(packet.data, packet.length, receiveTimeNs)
+                    val sequence = processPacket(packet.data, packet.length, receiveTimeNs)
+                    if (sequence != null) {
+                        maybeSendHeartbeat(packet, sequence)
+                    }
                     lastPacketTime = System.currentTimeMillis()
                 }
             }
@@ -296,12 +338,12 @@ class UdpAudioReceiver(
         }
     }
 
-    private fun processPacket(data: ByteArray, length: Int, receiveTimeNs: Long) {
+    private fun processPacket(data: ByteArray, length: Int, receiveTimeNs: Long): Int? {
         // Packet: [seq(4)] + [capture_time_ns(8)] + [encrypted_audio]
         if (length < 12) {
             shortPackets.incrementAndGet()
             Log.w(TAG, "Packet too short: $length bytes")
-            return
+            return null
         }
         totalPackets.incrementAndGet()
         lastPacketLength.set(length.toLong())
@@ -332,7 +374,8 @@ class UdpAudioReceiver(
                 expectedSequence.set(sequenceNumber.toLong())
                 expected = sequenceNumber.toLong()
             }
-            if (sequenceNumber < expected - sequenceThreshold) {
+            val threshold = sequenceThresholdLimit.get()
+            if (sequenceNumber < expected - threshold) {
                 // Too old packet, ignore
                 tooOldPackets.incrementAndGet()
                 consecutiveTooOld++
@@ -341,11 +384,11 @@ class UdpAudioReceiver(
                     expectedSequence.set(sequenceNumber.toLong())
                     consecutiveTooOld = 0
                 }
-                return
+                return null
             }
             consecutiveTooOld = 0
 
-            if (sequenceNumber > expected + sequenceThreshold) {
+            if (sequenceNumber > expected + threshold) {
                 Log.w(TAG, "Large sequence gap: expected=$expected, got=$sequenceNumber")
                 // Reset expected sequence
                 expectedSequence.set((sequenceNumber + 1).toLong())
@@ -366,9 +409,31 @@ class UdpAudioReceiver(
             }
             enqueueAudioPacket(decryptedAudio, normalizedCaptureTimeNs, receiveTimeNs, captureTimeValid)
 
+            return sequenceNumber
         } catch (e: Exception) {
             decryptErrors.incrementAndGet()
             Log.e(TAG, "Error processing packet", e)
+        }
+        return null
+    }
+
+    private fun maybeSendHeartbeat(packet: DatagramPacket, sequenceNumber: Int) {
+        val nowMs = System.currentTimeMillis()
+        val lastMs = lastHeartbeatSentMs.get()
+        if (nowMs - lastMs < HEARTBEAT_INTERVAL_MS) return
+
+        val socket = datagramSocket ?: return
+        try {
+            val payload = heartbeatPayload.copyOf()
+            payload[0] = 0x41
+            payload[1] = 0x43
+            payload[2] = 0x4B
+            payload[3] = (sequenceNumber and 0xFF).toByte()
+            val response = DatagramPacket(payload, payload.size, packet.address, packet.port)
+            socket.send(response)
+            lastHeartbeatSentMs.set(nowMs)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send UDP heartbeat", e)
         }
     }
 
@@ -382,7 +447,8 @@ class UdpAudioReceiver(
             audioQueue.add(AudioPacket(data, captureTimeClientNs, receiveTimeNs, captureTimeValid))
 
             // Limit queue size to prevent memory overflow
-            while (audioQueue.size > MAX_QUEUE_SIZE) {
+            val limit = maxQueueSizeLimit.get()
+            while (audioQueue.size > limit) {
                 audioQueue.removeFirstOrNull()
             }
         }

@@ -177,6 +177,31 @@ Java_cn_bincker_stream_sound_entity_OboeAudioPlayer_nativeGetStreamInfo(
     return JNI_TRUE;
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_cn_bincker_stream_sound_entity_OboeAudioPlayer_nativeSetBufferSizeInFrames(
+    JNIEnv *env,
+    jobject /* thiz */,
+    jlong handle,
+    jint frames
+) {
+    auto *player = reinterpret_cast<OboePlayer *>(handle);
+    if (!player || !player->stream || frames < 0) {
+        return -1;
+    }
+    if (frames == 0) {
+        return player->stream->getBufferSizeInFrames();
+    }
+    int32_t capacity = player->stream->getBufferCapacityInFrames();
+    int32_t target = std::min(static_cast<int32_t>(frames), capacity);
+    auto result = player->stream->setBufferSizeInFrames(target);
+    if (!result) {
+        __android_log_print(ANDROID_LOG_WARN, TAG, "setBufferSizeInFrames failed: %s",
+                            oboe::convertToText(result.error()));
+        return -1;
+    }
+    return result.value();
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_cn_bincker_stream_sound_entity_OboeAudioPlayer_nativeStop(
     JNIEnv *env,

@@ -218,9 +218,46 @@ class DeviceListViewModel @Inject constructor(
         }
     }
 
-    fun savePlaybackConfig(audioBufferSizeBytes: Int, packetSequenceThreshold: Int) {
+    fun savePlaybackConfig(
+        audioBufferSizeBytes: Int,
+        packetSequenceThreshold: Int,
+        maxAudioQueueSize: Int,
+        oboePreferredBufferFrames: Int,
+    ) {
         viewModelScope.launch {
-            appConfigRepository.updatePlaybackConfig(audioBufferSizeBytes, packetSequenceThreshold)
+            appConfigRepository.updatePlaybackConfig(
+                audioBufferSizeBytes,
+                packetSequenceThreshold,
+                maxAudioQueueSize,
+                oboePreferredBufferFrames,
+            )
+            _appConfig.value = appConfigRepository.getAppConfigSnapshot()
+        }
+    }
+
+    fun updateMaxAudioQueueSize(maxAudioQueueSize: Int) {
+        viewModelScope.launch {
+            val safeSize = maxAudioQueueSize.coerceIn(1, 100)
+            serviceBinder?.updateMaxAudioQueueSize(safeSize)
+                ?: appConfigRepository.updateMaxAudioQueueSize(safeSize)
+            _appConfig.value = appConfigRepository.getAppConfigSnapshot()
+        }
+    }
+
+    fun updateOboePreferredBufferFrames(preferredFrames: Int) {
+        viewModelScope.launch {
+            val safeFrames = preferredFrames.coerceIn(0, 4096)
+            serviceBinder?.updateOboePreferredBufferFrames(safeFrames)
+                ?: appConfigRepository.updateOboePreferredBufferFrames(safeFrames)
+            _appConfig.value = appConfigRepository.getAppConfigSnapshot()
+        }
+    }
+
+    fun updatePacketSequenceThreshold(packetSequenceThreshold: Int) {
+        viewModelScope.launch {
+            val safeThreshold = packetSequenceThreshold.coerceIn(0, 10000)
+            serviceBinder?.updatePacketSequenceThreshold(safeThreshold)
+                ?: appConfigRepository.updatePacketSequenceThreshold(safeThreshold)
             _appConfig.value = appConfigRepository.getAppConfigSnapshot()
         }
     }

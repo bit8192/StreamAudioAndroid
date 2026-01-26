@@ -133,10 +133,38 @@ class AppConfigRepository {
         }
     }
 
-    suspend fun updatePlaybackConfig(audioBufferSizeBytes: Int, packetSequenceThreshold: Int) {
+    suspend fun updatePlaybackConfig(
+        audioBufferSizeBytes: Int,
+        packetSequenceThreshold: Int,
+        maxAudioQueueSize: Int,
+        oboePreferredBufferFrames: Int,
+    ) {
         mutex.withLock {
             appConfig.audioBufferSizeBytes = audioBufferSizeBytes
             appConfig.packetSequenceThreshold = packetSequenceThreshold
+            appConfig.maxAudioQueueSize = maxAudioQueueSize
+            appConfig.oboePreferredBufferFrames = oboePreferredBufferFrames
+            saveAppConfig()
+        }
+    }
+
+    suspend fun updateMaxAudioQueueSize(maxAudioQueueSize: Int) {
+        mutex.withLock {
+            appConfig.maxAudioQueueSize = maxAudioQueueSize
+            saveAppConfig()
+        }
+    }
+
+    suspend fun updatePacketSequenceThreshold(packetSequenceThreshold: Int) {
+        mutex.withLock {
+            appConfig.packetSequenceThreshold = packetSequenceThreshold
+            saveAppConfig()
+        }
+    }
+
+    suspend fun updateOboePreferredBufferFrames(oboePreferredBufferFrames: Int) {
+        mutex.withLock {
+            appConfig.oboePreferredBufferFrames = oboePreferredBufferFrames
             saveAppConfig()
         }
     }

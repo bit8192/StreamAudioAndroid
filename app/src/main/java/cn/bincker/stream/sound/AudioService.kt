@@ -3,6 +3,7 @@ package cn.bincker.stream.sound
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -200,10 +201,13 @@ class AudioService : Service() {
     }
 
     private fun updateNotification(contentText: String) {
+        val contentIntent = buildNotificationContentIntent()
         val notification = Notification.Builder(this, notificationId)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(contentText)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
             .build()
 
         // Update the foreground service notification (more reliable than notify-only on some devices/OS versions)
@@ -337,6 +341,30 @@ class AudioService : Service() {
             deviceConnectionManager.clearError(deviceId)
         }
 
+        fun updateMaxAudioQueueSize(maxAudioQueueSize: Int) {
+            val safeSize = maxAudioQueueSize.coerceIn(1, 100)
+            scope.launch {
+                appConfigRepository.updateMaxAudioQueueSize(safeSize)
+                deviceConnectionManager.updateMaxAudioQueueSize(safeSize)
+            }
+        }
+
+        fun updateOboePreferredBufferFrames(oboePreferredBufferFrames: Int) {
+            val safeFrames = oboePreferredBufferFrames.coerceIn(0, 4096)
+            scope.launch {
+                appConfigRepository.updateOboePreferredBufferFrames(safeFrames)
+                deviceConnectionManager.updateOboePreferredBufferFrames(safeFrames)
+            }
+        }
+
+        fun updatePacketSequenceThreshold(packetSequenceThreshold: Int) {
+            val safeThreshold = packetSequenceThreshold.coerceIn(0, 10000)
+            scope.launch {
+                appConfigRepository.updatePacketSequenceThreshold(safeThreshold)
+                deviceConnectionManager.updatePacketSequenceThreshold(safeThreshold)
+            }
+        }
+
         // 配对设备
         fun pairDevice(uri: String) {
             this@AudioService.startService(Intent(this@AudioService, AudioService::class.java).apply {
@@ -350,6 +378,7 @@ class AudioService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Start as foreground service
+        val contentIntent = buildNotificationContentIntent()
         startForeground(
             foregroundNotificationId,
             Notification.Builder(this, notificationId)
@@ -363,6 +392,8 @@ class AudioService : Service() {
                     )
                 )
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentIntent(contentIntent)
+                .setAutoCancel(true)
                 .build()
         )
 
@@ -425,6 +456,18 @@ class AudioService : Service() {
             device.startListening(scope)
             device.ecdh()
         }
+    }
+
+    private fun buildNotificationContentIntent(): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        return PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     override fun onDestroy() {

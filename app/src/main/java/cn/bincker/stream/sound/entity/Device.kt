@@ -178,6 +178,18 @@ class Device(
         }
     }
 
+    fun updateMaxAudioQueueSize(maxAudioQueueSize: Int) {
+        udpAudioReceiver?.setMaxQueueSize(maxAudioQueueSize)
+    }
+
+    fun updateOboePreferredBufferFrames(oboePreferredBufferFrames: Int) {
+        udpAudioReceiver?.setOboePreferredBufferFrames(oboePreferredBufferFrames)
+    }
+
+    fun updatePacketSequenceThreshold(packetSequenceThreshold: Int) {
+        udpAudioReceiver?.setSequenceThreshold(packetSequenceThreshold)
+    }
+
     val isConnected get() = live && channel != null && channel?.isOpen == true && channel?.isConnected == true
 
     suspend fun <T> withChannel(f: suspend SocketChannel. ()->T): T {
@@ -486,6 +498,8 @@ class Device(
             val appConfig = connectionManager.getAppConfigSnapshot()
             val safeBufferSizeBytes = appConfig.audioBufferSizeBytes.coerceIn(256, 1 shl 20)
             val safeSequenceThreshold = appConfig.packetSequenceThreshold.coerceIn(1, 10000)
+            val safeMaxQueueSize = appConfig.maxAudioQueueSize.coerceIn(1, 100)
+            val safeOboeBufferFrames = appConfig.oboePreferredBufferFrames.coerceIn(0, 4096)
 
             // Start UDP receiver with udpAudioKey
             try {
@@ -502,6 +516,8 @@ class Device(
                     format = format,
                     audioBufferSizeBytes = safeBufferSizeBytes,
                     sequenceThreshold = safeSequenceThreshold,
+                    maxQueueSize = safeMaxQueueSize,
+                    oboePreferredBufferFrames = safeOboeBufferFrames,
                     serverToClientOffsetNs = serverToClientOffsetNs,
                     lastSyncRttNs = lastSyncRttNs,
                 )
