@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
@@ -50,6 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
@@ -199,13 +201,18 @@ private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLaunche
     val snackbarHostState = remember { SnackbarHostState() }
     val errorMessages by vm.errorMessages.collectAsState()
     var selectedDeviceId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showAbout by rememberSaveable { mutableStateOf(false) }
     val deviceList by vm.deviceList.collectAsState()
     val selectedDevice = remember(deviceList, selectedDeviceId) {
         selectedDeviceId?.let { id -> deviceList.firstOrNull { it.config.address == id } }
     }
 
-    BackHandler(enabled = selectedDeviceId != null) {
-        selectedDeviceId = null
+    BackHandler(enabled = selectedDeviceId != null || showAbout) {
+        if (showAbout) {
+            showAbout = false
+        } else {
+            selectedDeviceId = null
+        }
     }
 
     // 显示错误消息
@@ -222,10 +229,24 @@ private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLaunche
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text(selectedDevice?.config?.name ?: stringResource(R.string.app_name)) },
+                title = {
+                    Text(
+                        when {
+                            showAbout -> stringResource(R.string.about_title)
+                            selectedDevice != null -> selectedDevice.config.name
+                            else -> stringResource(R.string.app_name)
+                        }
+                    )
+                },
                 navigationIcon = {
-                    if (selectedDeviceId != null) {
-                        IconButton(onClick = { selectedDeviceId = null }) {
+                    if (selectedDeviceId != null || showAbout) {
+                        IconButton(onClick = {
+                            if (showAbout) {
+                                showAbout = false
+                            } else {
+                                selectedDeviceId = null
+                            }
+                        }) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "返回",
@@ -234,7 +255,7 @@ private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLaunche
                     }
                 },
                 actions = {
-                    if (selectedDeviceId == null) {
+                    if (selectedDeviceId == null && !showAbout) {
                         val context = LocalContext.current
                         val activity = LocalActivity.current
                         IconButton(onClick = {
@@ -254,12 +275,17 @@ private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLaunche
                         }) {
                             Icon(painterResource(R.drawable.ic_qr_scan), contentDescription = "扫码")
                         }
+                        IconButton(onClick = { showAbout = true }) {
+                            Icon(Icons.Filled.Info, contentDescription = "关于")
+                        }
                     }
                 }
             )
         }
     ) { innerPadding ->
-        if (selectedDeviceId == null) {
+        if (showAbout) {
+            AboutPage(modifier = Modifier.padding(innerPadding))
+        } else if (selectedDeviceId == null) {
             DevicesList(
                 modifier = Modifier.padding(innerPadding),
                 vm = vm,
@@ -275,6 +301,40 @@ private fun Page(vm: DeviceListViewModel, barcodeLauncher: ActivityResultLaunche
                 modifier = Modifier.padding(innerPadding),
             )
         }
+    }
+}
+
+@Composable
+private fun AboutPage(modifier: Modifier = Modifier) {
+    val uriHandler = LocalUriHandler.current
+    val sourceUrl = stringResource(R.string.about_source_url)
+    val licenseUrl = stringResource(R.string.about_license_url)
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.about_version, BuildConfig.VERSION_NAME),
+            fontSize = 20.sp,
+        )
+        Text(text = stringResource(R.string.about_android_desc))
+        Text(text = stringResource(R.string.about_author))
+        Text(text = stringResource(R.string.about_email))
+        Text(text = stringResource(R.string.about_source_label))
+        Text(
+            text = sourceUrl,
+            color = Color(0xFF1E88E5),
+            modifier = Modifier.clickable { uriHandler.openUri(sourceUrl) }
+        )
+        Text(text = stringResource(R.string.about_license_label))
+        Text(text = stringResource(R.string.about_license_name))
+        Text(
+            text = licenseUrl,
+            color = Color(0xFF1E88E5),
+            modifier = Modifier.clickable { uriHandler.openUri(licenseUrl) }
+        )
     }
 }
 

@@ -17,4 +17,16 @@
     <string name="device_connection_error">连接错误</string>
     <string name="device_tap_to_connect">点击连接</string>
     <string name="device_tap_to_disconnect">点击断开</string>
+
+    <!-- About Page Strings -->
+    <string name="about_title">关于</string>
+    <string name="about_version">StreamAudio v%1$s</string>
+    <string name="about_android_desc">Android 客户端</string>
+    <string name="about_author">作者：bincker</string>
+    <string name="about_email">邮箱：bit16@qq.com</string>
+    <string name="about_source_label">源码地址：</string>
+    <string name="about_source_url">https://github.com/bit8192/StreamAudio</string>
+    <string name="about_license_label">开源协议：</string>
+    <string name="about_license_url">https://github.com/bit8192/StreamAudio/blob/main/LICENSE</string>
+    <string name="about_license_name">GPL-3.0</string>
 </resources>
