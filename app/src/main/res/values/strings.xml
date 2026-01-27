@@ -25,8 +25,8 @@
     <string name="about_author">作者：bincker</string>
     <string name="about_email">邮箱：bit16@qq.com</string>
     <string name="about_source_label">源码地址：</string>
-    <string name="about_source_url">https://github.com/bit8192/StreamAudio</string>
+    <string name="about_source_url">https://github.com/bit8192/StreamAudioAndroid</string>
     <string name="about_license_label">开源协议：</string>
-    <string name="about_license_url">https://github.com/bit8192/StreamAudio/blob/main/LICENSE</string>
+    <string name="about_license_url">https://github.com/bit8192/StreamAudioAndroid/blob/main/LICENSE</string>
     <string name="about_license_name">GPL-3.0</string>
 </resources>
